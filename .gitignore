@@ -1,0 +1,84 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build & Electron outputs
+dist/
+dist-electron/
+dist-ssr/
+build/
+out/
+release/
+*.tsbuildinfo
+src/**/*.js
+src/**/*.js.map
+electron/**/*.js
+electron/**/*.js.map
+
+# Environment variables & Secrets (Security)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+secrets.*
+credentials.*
+*client_secret*.json
+*service-account*.json
+
+# Persistent Browser Profiles, Cookies & Session State (Security - Never Commit!)
+playwright-social-profile/
+**/playwright-social-profile/
+.playwright/
+playwright-report/
+test-results/
+user-data/
+userData/
+mymanager-accounts.json
+*cookies*.json
+*storage-state*.json
+*session*.json
+*auth*.json
+
+# Local media / video test files
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+
+# Logs & Runtime data
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.pid
+*.seed
+*.pid.lock
+
+# Vite / Tooling caches
+.vite/
+.cache/
+.eslintcache
+.parcel-cache/
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
