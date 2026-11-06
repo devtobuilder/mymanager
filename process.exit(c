@@ -1,0 +1,21 @@
+[0] [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[0] 
+[0]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m347[22m[2m[0m ms[22m
+[0] 
+[0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[0] [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[1] [eval]:1
+[1] delete process.env.ELECTRON_RUN_AS_NODE; process.env.NODE_ENV='development'; require('child_process').spawn(require('electron'), ['.'], {stdio:'inherit', env:process.env}).on('exit', c =
+[1]                                                                                                                                                                                           
+[1] Expression expected
+[1] 
+[1] SyntaxError: Unexpected end of input
+[1]     at makeContextifyScript (node:internal/vm:194:14)
+[1]     at compileScript (node:internal/process/execution:388:10)
+[1]     at evalTypeScript (node:internal/process/execution:260:22)
+[1]     at node:internal/main/eval_string:71:3
+[1] 
+[1] Node.js v24.13.0
+[1] wait-on http://localhost:5173 && node -e "delete process.env.ELECTRON_RUN_AS_NODE; process.env.NODE_ENV='development'; require('child_process').spawn(require('electron'), ['.'], {stdio:'inherit', env:process.env}).on('exit', c = exited with code 1
+--> Sending SIGTERM to other processes..
+[0] vite exited with code 1

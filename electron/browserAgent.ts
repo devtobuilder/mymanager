@@ -62,7 +62,7 @@ export function resolveAccountUrl(account: PlatformAccount, mode: 'profile' | 'a
       return clean ? `https://www.linkedin.com/in/${clean}/` : account.profileUrl;
     case 'youtube':
       if (mode === 'analytics') {
-        return 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview';
+        return 'https://studio.youtube.com/';
       }
       return clean ? `https://www.youtube.com/@${clean}` : account.profileUrl;
     case 'instagram':
@@ -95,8 +95,8 @@ export function resolveExtractionPages(account: PlatformAccount): Array<{ label:
     case 'youtube':
       return [
         {
-          label: 'YouTube Studio Analytics Hub',
-          url: 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview',
+          label: 'YouTube Studio',
+          url: 'https://studio.youtube.com/',
         },
       ];
     case 'instagram':
@@ -451,11 +451,12 @@ function harvestJsonMetrics(
 
 export class LocalLlmBrowserAgent {
   private context: BrowserContext | null = null;
+  private contextHeadless: boolean | null = null;
   private userDataDir: string;
   private config: LlmConfig = {
     ollamaEndpoint: 'http://127.0.0.1:11434',
     model: 'llama3.2',
-    headless: false,
+    headless: true,
     livePollingIntervalSec: 25,
   };
   private onLogCallback: (log: BrowserAgentLog) => void;
@@ -492,20 +493,32 @@ export class LocalLlmBrowserAgent {
       if (!fs.existsSync(this.userDataDir)) {
         fs.mkdirSync(this.userDataDir, { recursive: true });
       }
+      // Stats updates (forceVisible = false) ALWAYS run in a headless browser;
+      // Interactive login & upload testing (forceVisible = true) open a visible browser window.
+      const headless = forceVisible ? false : true;
+
+      if (this.context && this.contextHeadless !== headless) {
+        await this.closeContext();
+        await new Promise((r) => setTimeout(r, 600));
+      }
+
       if (this.context) {
         return this.context;
       }
-      const headless = forceVisible ? false : this.config.headless;
       this.emitLog(
         'browser',
-        `Launching persistent Chromium context (${headless ? 'headless' : 'interactive'}) at ${this.userDataDir}`
+        `Starting ${headless ? 'headless background' : 'visible'} browser session`
       );
+      const args = ['--disable-blink-features=AutomationControlled'];
+      if (headless) {
+        args.push('--headless=new');
+      }
       const baseOptions = {
         headless,
         userAgent:
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
-        args: ['--disable-blink-features=AutomationControlled'],
+        args,
       };
       try {
         this.context = await chromium.launchPersistentContext(this.userDataDir, baseOptions);
@@ -522,16 +535,40 @@ export class LocalLlmBrowserAgent {
           });
         }
       }
+      this.contextHeadless = headless;
       this.context.on('close', () => {
         this.context = null;
+        this.contextHeadless = null;
       });
       return this.context;
     } catch (err: any) {
       this.emitLog(
         'error',
-        `Playwright browser launch error: ${err?.message || 'Unable to launch browser'}`
+        `Browser launch error: ${err?.message || 'Unable to launch browser'}`
       );
       return null;
+    }
+  }
+
+  public async closeContext(): Promise<void> {
+    if (!this.context) {
+      this.contextHeadless = null;
+      return;
+    }
+    const ctx = this.context;
+    this.context = null;
+    this.contextHeadless = null;
+    try {
+      await ctx.close();
+      this.emitLog('browser', 'Closed background browser instance.');
+    } catch {
+      // ignore close errors
+    }
+  }
+
+  public async closeContextIfHeadless(): Promise<void> {
+    if (this.context && this.contextHeadless === true) {
+      await this.closeContext();
     }
   }
 
@@ -587,11 +624,6 @@ export class LocalLlmBrowserAgent {
       }
       const data = (await response.json()) as { response?: string };
       if (data?.response) {
-        this.emitLog(
-          'llm',
-          `Ollama (${this.config.model}) parsed page metrics`,
-          platform
-        );
         return data.response;
       }
       return null;
@@ -727,7 +759,7 @@ export class LocalLlmBrowserAgent {
       } catch (err: any) {
         this.emitLog(
           'browser',
-          `Navigation note on ${account.name}: ${err?.message || 'reading available DOM'}`,
+          `Navigation note on ${account.name}: ${err?.message || 'reading available page content'}`,
           account.id
         );
       }
@@ -826,91 +858,1107 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
     };
   }
 
+  /**
+   * Builds normalized hashtags and auto-generates suggested tags from title/description when needed.
+   */
+  private buildUploadTags(payload: VideoUploadPayload): string {
+    const rawTokens = (payload.tags || '')
+      .split(/[\s,]+/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .map((t) => (t.startsWith('#') ? t : `#${t}`));
+
+    const stopWords = new Set([
+      'the',
+      'and',
+      'for',
+      'with',
+      'this',
+      'that',
+      'from',
+      'into',
+      'your',
+      'day',
+      'testing',
+    ]);
+    const keywordTokens = `${payload.title || ''} ${payload.description || ''}`
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4 && !stopWords.has(w))
+      .slice(0, 3)
+      .map((w) => `#${w}`);
+
+    const combined = Array.from(new Set([...rawTokens, ...keywordTokens, '#shorts']));
+    return combined.slice(0, 5).join(' ');
+  }
+
+  /**
+   * Clicks the first visible element on the page matching any of the given exact text labels or selectors.
+   */
+  private async clickVisibleElement(page: Page, selectors: string[]): Promise<boolean> {
+    for (const sel of selectors) {
+      try {
+        const handles = await page.$$(sel);
+        for (const h of handles) {
+          const visible = await h.isVisible().catch(() => false);
+          if (visible) {
+            await h.scrollIntoViewIfNeeded().catch(() => {});
+            await h.click({ timeout: 2500 }).catch(async () => {
+              await h.click({ force: true }).catch(() => {});
+            });
+            return true;
+          }
+        }
+      } catch {
+        // ignore selector error
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Dismisses TikTok Studio tutorial / onboarding popups ("Got it", "Skip", etc.)
+   */
+  private async dismissTikTokPopups(page: Page): Promise<void> {
+    const popupSelectors = [
+      'button:has-text("Got it")',
+      'div[role="button"]:has-text("Got it")',
+      'span:has-text("Got it")',
+      'button:has-text("Skip")',
+      'div[role="button"]:has-text("Skip")',
+      'button:has-text("OK")',
+      '.TUXButton:has-text("Got it")',
+    ];
+    for (const sel of popupSelectors) {
+      try {
+        const btns = await page.$$(sel);
+        for (const btn of btns) {
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click({ timeout: 1500 }).catch(() => {});
+            await page.waitForTimeout(300);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * Clears any existing or pre-filled text in a contenteditable / Draft.js / Lexical / Polymer element
+   * using native keyboard events (without destroying Draft.js internal DOM wrappers) and types the text.
+   */
+  private async clearAndInsertText(
+    page: Page,
+    elementSelector: string,
+    text: string,
+    timeoutMs = 18000
+  ): Promise<boolean> {
+    const el = await page
+      .waitForSelector(elementSelector, { state: 'visible', timeout: timeoutMs })
+      .catch(() => null);
+    if (!el) return false;
+
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    const box = await el.boundingBox().catch(() => null);
+    if (box) {
+      await page.mouse.click(box.x + Math.min(40, box.width / 2), box.y + Math.min(20, box.height / 2)).catch(() => {});
+    } else {
+      await el.click({ force: true }).catch(() => {});
+    }
+    await page.waitForTimeout(300);
+
+    // 1. Clear pre-filled text (e.g. "11-5-26") using ONLY keyboard events so Draft.js (TikTok & X) keeps its internal state intact
+    await page.keyboard.press('Control+A').catch(() => {});
+    await page.waitForTimeout(80);
+    await page.keyboard.press('Backspace').catch(() => {});
+    await page.waitForTimeout(80);
+
+    const remainingLen = await el
+      .evaluate((node: Element) => ((node as HTMLElement).innerText || '').trim().length)
+      .catch(() => 0);
+    if (remainingLen > 0) {
+      await page.keyboard.press('End').catch(() => {});
+      for (let i = 0; i < Math.min(remainingLen + 15, 80); i++) {
+        await page.keyboard.press('Backspace').catch(() => {});
+      }
+      await page.keyboard.press('Home').catch(() => {});
+      for (let i = 0; i < Math.min(remainingLen + 15, 80); i++) {
+        await page.keyboard.press('Delete').catch(() => {});
+      }
+    }
+
+    await page.waitForTimeout(200);
+
+    // 2. Type text line-by-line using real keystrokes so Draft.js (X & TikTok), Quill (LinkedIn), and Polymer (YouTube) commit every character
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.length > 0) {
+        await page.keyboard.type(line, { delay: 12 }).catch(() => {});
+        // If the line ends with a hashtag, press Space then Escape so hashtag autocomplete popups don't swallow newlines
+        if (/#\w+$/.test(line.trim())) {
+          await page.keyboard.press('Space').catch(() => {});
+          await page.waitForTimeout(100);
+          await page.keyboard.press('Escape').catch(() => {});
+        }
+      }
+      if (i < lines.length - 1) {
+        await page.keyboard.press('Shift+Enter').catch(() => {});
+        await page.waitForTimeout(60);
+      }
+    }
+
+    await page.waitForTimeout(300);
+    return true;
+  }
+
   public async replicateVideoUpload(
     payload: VideoUploadPayload,
     accounts: PlatformAccount[],
     onStatusUpdate: (status: PlatformUploadStatus) => void
   ): Promise<void> {
+    const isDryRun = payload.dryRun !== false;
     const targetAccounts = accounts.filter(
       (a) => a.linked && payload.platforms.includes(a.id)
     );
 
     this.emitLog(
       'upload',
-      `Starting multi-platform video replication for "${payload.title}" (${payload.videoFileName}) across ${targetAccounts.length} linked platforms`
+      `${isDryRun ? '[TEST / STAGE ONLY — NO PUBLISH] ' : ''}Starting multi-platform video flow for "${payload.title}" across ${targetAccounts.length} linked platforms`
     );
 
+    // Always launch a visible browser for upload staging/testing so the user can see and verify
     const ctx = await this.ensurePersistentContext(true);
+    const hasVideoFile = Boolean(payload.videoPath && fs.existsSync(payload.videoPath));
+    const hasThumbnailFile = Boolean(payload.thumbnailPath && fs.existsSync(payload.thumbnailPath));
+    const suggestedTags = this.buildUploadTags(payload);
+    const userOrSuggestedTags = (payload.tags || '').trim() || suggestedTags;
+
+    // Tags are on the line directly below the text (single newline, no empty line)
+    // Title + Tags (for LinkedIn & Instagram)
+    const titleAndTagsCaption = [payload.title.trim(), userOrSuggestedTags.trim()]
+      .filter(Boolean)
+      .join('\n');
+
+    // Title + Description + Tags (for TikTok, etc. with single line spacing)
+    const fullCaption = [
+      payload.title.trim(),
+      payload.description.trim(),
+      userOrSuggestedTags.trim(),
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     for (const account of targetAccounts) {
       const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+      const targetUploadUrl =
+        account.id === 'linkedin'
+          ? 'https://www.linkedin.com/sharing/compose'
+          : account.uploadUrl;
 
       onStatusUpdate({
         platform: account.id,
         status: 'opening_browser',
-        progress: 20,
-        message: `Opening ${account.name} upload studio (${account.uploadUrl})...`,
+        progress: 25,
+        message: `Opening ${account.name} upload studio (${targetUploadUrl})...`,
       });
       this.emitLog(
         'browser',
-        `Navigating to ${account.name} upload studio (${account.uploadUrl})`,
+        `Opening ${account.name} upload studio (${targetUploadUrl})`,
         account.id
       );
 
+      let page: Page | null = null;
       if (ctx) {
         try {
-          const page = await this.getOrCreatePage(ctx, account.uploadUrl);
-          await page.goto(account.uploadUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          const fileInputs = await page.$$('input[type="file"]');
-          if (fileInputs.length > 0 && fs.existsSync(payload.videoPath)) {
-            await fileInputs[0].setInputFiles(payload.videoPath);
-            this.emitLog('upload', `Attached file ${payload.videoFileName} to file input on ${account.name}`, account.id);
-          }
+          page = await this.getOrCreatePage(ctx, targetUploadUrl);
+          await page.bringToFront();
+          await page.goto(targetUploadUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await page.waitForTimeout(2500);
         } catch (err: any) {
-          this.emitLog('browser', `Upload page navigation note for ${account.name}: ${err?.message || 'opened'}`, account.id);
+          this.emitLog(
+            'browser',
+            `Opened ${account.name} (${err?.message || 'ready'})`,
+            account.id
+          );
         }
       }
 
       onStatusUpdate({
         platform: account.id,
         status: 'llm_navigating',
-        progress: 50,
-        message: `Local LLM (${this.config.model}) locating video dropzone & title/description inputs...`,
+        progress: 55,
+        message: `Preparing upload modal & inputs on ${account.name}...`,
       });
 
-      await this.queryOllama(
-        `Identify selectors for uploading video file "${payload.videoFileName}", setting title "${payload.title}" and description "${payload.description}" on ${account.name} (${account.uploadUrl}). Return JSON with fileInputSelector, titleSelector, descriptionSelector, submitButtonSelector.`,
-        account.id
-      );
-      await delay(500);
+      if (page) {
+        try {
+          // =========================================================================
+          // 1. X / TWITTER: Only use Title (no description or tags)
+          // =========================================================================
+          if (account.id === 'twitter') {
+            if (hasVideoFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 70,
+                message: `Staging "${payload.videoFileName}" on X...`,
+              });
+              const fileInput = await page.$(
+                'input[type="file"][data-testid="fileInput"], input[type="file"]'
+              );
+              if (fileInput) {
+                await fileInput.setInputFiles(payload.videoPath);
+                this.emitLog('upload', `Attached "${payload.videoFileName}" on X`, account.id);
+                await page.waitForTimeout(2500);
+              }
+            }
 
-      onStatusUpdate({
-        platform: account.id,
-        status: 'uploading_file',
-        progress: 75,
-        message: `Uploading "${payload.videoFileName}" to ${account.name}...`,
-      });
-      await delay(500);
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 90,
+              message: `Setting Title only on X...`,
+            });
+            await this.clearAndInsertText(
+              page,
+              '[data-testid="tweetTextarea_0"] [contenteditable="true"], [data-testid="tweetTextarea_0"], div[role="textbox"][contenteditable="true"]',
+              payload.title.trim()
+            );
 
-      onStatusUpdate({
-        platform: account.id,
-        status: 'filling_metadata',
-        progress: 90,
-        message: `Populating Title ("${payload.title}") & Description...`,
-      });
+            // If not test mode, click "Post"
+            if (!isDryRun) {
+              await page.waitForTimeout(1000);
+              const clickedPost = await this.clickVisibleElement(page, [
+                '[data-testid="tweetButtonInline"]',
+                '[data-testid="tweetButton"]',
+                'button[role="button"]:has-text("Post")',
+                'button:has-text("Post")',
+              ]);
+              if (clickedPost) {
+                this.emitLog('upload', 'Clicked "Post" on X', account.id);
+                await page.waitForTimeout(3000);
+              }
+            }
+          }
+
+          // =========================================================================
+          // 2. LINKEDIN: Opens https://www.linkedin.com/sharing/compose directly, attaches video via media button, fills post
+          // =========================================================================
+          else if (account.id === 'linkedin') {
+            let videoAttached = false;
+
+            if (hasVideoFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 65,
+                message: `Clicking media button & attaching "${payload.videoFileName}" in LinkedIn composer...`,
+              });
+
+              // Wait for compose dialog to be ready
+              await page.waitForTimeout(1500);
+
+              // Intercept the native OS file picker when clicking the media button
+              const fcPromise = page.waitForEvent('filechooser', { timeout: 6000 }).catch(() => null);
+
+              // Click the media button (photo/video icon at bottom left of the compose box)
+              await this.clickVisibleElement(page, [
+                'button[aria-label*="Add media" i]',
+                'button[aria-label*="Add a photo" i]',
+                'button[aria-label*="media" i]',
+                'button.share-promoted-detour-button',
+                'button:has(svg[data-test-icon="image-medium"])',
+                'button:has(svg[data-test-icon*="image"])',
+                'button:has(svg path[d*="M19 4H5a3 3 0 00-3 3v10a3"])',
+                'div[role="button"][aria-label*="media" i]',
+                '.share-box-footer button:first-of-type',
+              ]);
+
+              const fc = await fcPromise;
+              if (fc) {
+                await fc.setFiles(payload.videoPath);
+                videoAttached = true;
+                this.emitLog('upload', `Attached "${payload.videoFileName}" via LinkedIn media chooser`, account.id);
+              } else {
+                // Check if clicking opened an file input or secondary modal
+                await page.waitForTimeout(1000);
+                const fileInputs = await page.$$('input[type="file"]');
+                if (fileInputs.length > 0) {
+                  await fileInputs[fileInputs.length - 1].setInputFiles(payload.videoPath);
+                  videoAttached = true;
+                  this.emitLog('upload', `Attached "${payload.videoFileName}" via file input on LinkedIn`, account.id);
+                }
+              }
+
+              if (videoAttached) {
+                await page.waitForTimeout(3000);
+
+                // Thumbnail: Click the thumbnail icon directly on the video editor dialog that opened
+                if (hasThumbnailFile) {
+                  onStatusUpdate({
+                    platform: account.id,
+                    status: 'uploading_file',
+                    progress: 75,
+                    message: `Adding video thumbnail on LinkedIn...`,
+                  });
+
+                  // Click thumbnail icon on the edit/preview dialog
+                  await this.clickVisibleElement(page, [
+                    'button[aria-label*="Thumbnail" i]',
+                    'button:has-text("Thumbnail")',
+                    'button:has(svg[data-test-icon*="image"])',
+                    '[role="tab"]:has-text("Thumbnail")',
+                    'span:text-is("Thumbnail")',
+                  ]);
+                  await page.waitForTimeout(1000);
+
+                  // Click "add video thumbnail" or upload thumbnail file
+                  const thumbFcPromise = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+                  await this.clickVisibleElement(page, [
+                    'button:has-text("Add video thumbnail")',
+                    'button[aria-label*="thumbnail" i]',
+                    'label:has-text("Add video thumbnail")',
+                    'button:has-text("Upload thumbnail")',
+                  ]);
+                  const thumbFc = await thumbFcPromise;
+                  if (thumbFc) {
+                    await thumbFc.setFiles(payload.thumbnailPath!);
+                    this.emitLog('upload', 'Attached thumbnail on LinkedIn', account.id);
+                  } else {
+                    const thumbInputs = await page.$$('input[type="file"]');
+                    if (thumbInputs.length > 0) {
+                      await thumbInputs[thumbInputs.length - 1].setInputFiles(payload.thumbnailPath!);
+                      this.emitLog('upload', 'Attached thumbnail on LinkedIn via file input', account.id);
+                    }
+                  }
+
+                  await page.waitForTimeout(1500);
+                  // Click "Add" / "Apply" on the thumbnail dialog if needed
+                  await this.clickVisibleElement(page, [
+                    'button:text-is("Add")',
+                    'button:has-text("Add")',
+                    'button:has-text("Apply")',
+                    '.video-edit-modal__footer button:has-text("Add")',
+                  ]);
+                  await page.waitForTimeout(1500);
+                }
+
+                // Click "Next" in LinkedIn's media preview dialog
+                await this.clickVisibleElement(page, [
+                  'button[aria-label="Next"]',
+                  'button:has-text("Next")',
+                  'span:text-is("Next")',
+                  '.share-box-footer__primary-btn',
+                ]);
+                await page.waitForTimeout(1500);
+              }
+            }
+
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 90,
+              message: `Filling post text on LinkedIn (Title then Tags)...`,
+            });
+            // LinkedIn must only show Title then Tags
+            await this.clearAndInsertText(
+              page,
+              '.ql-editor[contenteditable="true"], .ql-editor, [role="textbox"][aria-label*="Text editor" i], [role="textbox"][contenteditable="true"], div[contenteditable="true"]',
+              titleAndTagsCaption
+            );
+
+            // If not test mode, click "Post"
+            if (!isDryRun) {
+              await page.waitForTimeout(1000);
+              const clickedPost = await this.clickVisibleElement(page, [
+                'button.share-actions__primary-action',
+                'button:has-text("Post")',
+                'button[aria-label="Post"]',
+                '.share-box_actions button.artdeco-button--primary',
+              ]);
+              if (clickedPost) {
+                this.emitLog('upload', 'Clicked "Post" on LinkedIn', account.id);
+                await page.waitForTimeout(3000);
+              }
+            }
+          }
+
+          // =========================================================================
+          // 3. YOUTUBE STUDIO: Upload file, wait for modal, set Title (+ Suggested Hashtags button -> Add all) & Description (+ tags)
+          // =========================================================================
+          else if (account.id === 'youtube') {
+            await this.clickVisibleElement(page, [
+              '#create-icon',
+              'ytcp-button#create-icon',
+              'button[aria-label*="Create" i]',
+            ]);
+            await page.waitForTimeout(800);
+            await this.clickVisibleElement(page, [
+              'tp-yt-paper-item#text-item-0',
+              'ytcp-ve:has-text("Upload videos")',
+              'tp-yt-paper-item:has-text("Upload videos")',
+            ]);
+            await page.waitForTimeout(1000);
+
+            if (hasVideoFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 70,
+                message: `Uploading "${payload.videoFileName}" to YouTube Studio...`,
+              });
+              const fileInput = await page
+                .waitForSelector('input[type="file"]', { state: 'attached', timeout: 8000 })
+                .catch(() => null);
+              if (fileInput) {
+                await fileInput.setInputFiles(payload.videoPath);
+                this.emitLog(
+                  'upload',
+                  `Staged "${payload.videoFileName}" into YouTube Studio`,
+                  account.id
+                );
+              }
+            }
+
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 90,
+              message: `Setting Title & Description on YouTube Studio...`,
+            });
+
+            // Wait for YouTube Studio's Upload Details modal textboxes to become visible and finish default filename prefill
+            const ytTitleSelector =
+              'ytcp-social-suggestions-textbox#title-textarea #textbox, #title-textarea #textbox, #textbox[aria-label*="Add a title" i]';
+            const ytDescSelector =
+              'ytcp-social-suggestions-textbox#description-textarea #textbox, #description-textarea #textbox, #textbox[aria-label*="Tell viewers" i]';
+
+            const titleEl = await page
+              .waitForSelector(ytTitleSelector, { state: 'visible', timeout: 25000 })
+              .catch(() => null);
+
+            if (titleEl) {
+              // Wait 1.5s for YouTube Studio to finish auto-filling the filename (e.g. "11-5-26")
+              await page.waitForTimeout(1500);
+              // YouTube title is ONLY the Title
+              const cleanYtTitle = payload.title.trim();
+              await this.clearAndInsertText(page, ytTitleSelector, cleanYtTitle, 10000);
+              this.emitLog('upload', `Set YouTube Title: "${cleanYtTitle}"`, account.id);
+
+              // Click YouTube Studio's "Suggested hashtags" / "Suggesting Hashtags", then click "Add all"
+              await page.waitForTimeout(800);
+              const clickedSuggestions = await this.clickVisibleElement(page, [
+                'button:has-text("Suggesting Hashtags")',
+                'button:has-text("Suggested hashtags")',
+                'button:has-text("Suggested Hashtags")',
+                'ytcp-chip:has-text("Suggest")',
+                '[aria-label*="suggested hashtag" i]',
+                'ytcp-button:has-text("Hashtags")',
+              ]);
+              if (clickedSuggestions) {
+                this.emitLog('upload', 'Clicked Suggested Hashtags on YouTube Studio', account.id);
+                await page.waitForTimeout(1000);
+
+                // Click "Add all" once it appears
+                const clickedAddAll = await this.clickVisibleElement(page, [
+                  'button:has-text("Add all")',
+                  'button:has-text("Add All")',
+                  'tp-yt-paper-button:has-text("Add all")',
+                  'ytcp-button:has-text("Add all")',
+                  '[aria-label*="Add all" i]',
+                  '.add-all-button',
+                ]);
+                if (clickedAddAll) {
+                  this.emitLog('upload', 'Clicked "Add all" suggested hashtags on YouTube Studio', account.id);
+                } else {
+                  // Fallback: click individual suggestion chips if "Add all" button not present
+                  const chips = await page.$$('ytcp-chip:not([disabled]), .suggestion-chip, tp-yt-paper-item.suggestion');
+                  for (let c = 0; c < Math.min(chips.length, 3); c++) {
+                    if (await chips[c].isVisible().catch(() => false)) {
+                      await chips[c].click().catch(() => {});
+                      await page.waitForTimeout(300);
+                    }
+                  }
+                }
+              }
+            }
+
+            // Thumbnail for YouTube: Click "Upload file" under the thumbnail section
+            if (hasThumbnailFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 85,
+                message: `Uploading thumbnail on YouTube Studio...`,
+              });
+              const thumbFcPromise = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+              const clickedUploadThumb = await this.clickVisibleElement(page, [
+                '#select-button[aria-label*="Upload file" i]',
+                'button[aria-label*="Upload thumbnail" i]',
+                '#select-button:has-text("Upload file")',
+                '#select-button:has-text("Upload thumbnail")',
+                'button:has-text("Upload file")',
+                'button:has-text("Upload thumbnail")',
+                'ytcp-thumbnails-compact-editor-uploader #select-button',
+                'ytcp-thumbnails-compact-editor-uploader',
+              ]);
+              const thumbFc = await thumbFcPromise;
+              if (thumbFc) {
+                await thumbFc.setFiles(payload.thumbnailPath!);
+                this.emitLog('upload', 'Uploaded thumbnail on YouTube Studio via filechooser', account.id);
+              } else {
+                // If direct file input exists under thumbnail uploader
+                const thumbInput = await page.$('ytcp-thumbnails-compact-editor-uploader input[type="file"], input[type="file"]#file-loader');
+                if (thumbInput) {
+                  await thumbInput.setInputFiles(payload.thumbnailPath!);
+                  this.emitLog('upload', 'Uploaded thumbnail on YouTube Studio via input element', account.id);
+                }
+              }
+              await page.waitForTimeout(1500);
+            }
+
+            const descEl = await page
+              .waitForSelector(ytDescSelector, { state: 'visible', timeout: 10000 })
+              .catch(() => null);
+
+            if (descEl) {
+              // YouTube Description receives Description + Tags (with single line directly below)
+              const ytDescWithTags = [payload.description.trim(), userOrSuggestedTags.trim()]
+                .filter(Boolean)
+                .join('\n');
+              await this.clearAndInsertText(page, ytDescSelector, ytDescWithTags, 10000);
+              this.emitLog('upload', `Set YouTube Description with tags`, account.id);
+            }
+
+            // Step 1 Details: select "No, it's not made for kids"
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 92,
+              message: `Selecting audience & stepping through YouTube wizard...`,
+            });
+
+            // Target the actual scrollable body of the dialog
+            await page.evaluate(() => {
+              const el = document.querySelector('#scrollable-content, #dialog #scrollable-content, ytcp-uploads-dialog #scrollable-content');
+              if (el) {
+                el.scrollTop = el.scrollHeight;
+              }
+            }).catch(() => {});
+            await page.waitForTimeout(1000);
+
+            // Click the not-made-for-kids radio button specifically by targeting its input or container
+            const clickedKids = await page.evaluate(() => {
+              // Priority 1: tp-yt-paper-radio-button by name
+              const radio = document.querySelector(
+                'tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], #not-made-for-kids, [name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]'
+              ) as HTMLElement | null;
+              if (radio) {
+                radio.scrollIntoView({ block: 'center', inline: 'center' });
+                // Click the radio button element or its internal #radio container
+                const target = radio.querySelector('#radio') as HTMLElement | null || radio;
+                target.click();
+                return true;
+              }
+              // Priority 2: Find by label text
+              const all = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, [role="radio"]'));
+              const found = all.find((r) =>
+                ((r as HTMLElement).innerText || '').toLowerCase().includes('not made for kids')
+              ) as HTMLElement | null;
+              if (found) {
+                found.scrollIntoView({ block: 'center', inline: 'center' });
+                const target = found.querySelector('#radio') as HTMLElement | null || found;
+                target.click();
+                return true;
+              }
+              return false;
+            }).catch(() => false);
+
+            if (!clickedKids) {
+              await this.clickVisibleElement(page, [
+                'tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"] #radio',
+                'tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]',
+                '#not-made-for-kids #radio',
+                '#not-made-for-kids',
+              ]);
+            }
+
+            this.emitLog('upload', 'Selected "No, it\'s not made for kids" on YouTube Studio', account.id);
+            await page.waitForTimeout(1500);
+
+            // Step through wizard tabs: Details -> Video elements -> Checks -> Visibility
+            // Click the bottom-right #next-button
+            for (let step = 0; step < 4; step++) {
+              const onVisibilityStep = await page.evaluate(() => {
+                const pub = document.querySelector('[name="PUBLIC"], tp-yt-paper-radio-button[name="PUBLIC"]');
+                return Boolean(pub && pub.getBoundingClientRect().height > 0);
+              }).catch(() => false);
+
+              if (onVisibilityStep) {
+                break;
+              }
+
+              // Click next button
+              const nextClicked = await page.evaluate(() => {
+                const btn = document.querySelector('#next-button, ytcp-button#next-button') as HTMLElement | null;
+                if (btn && !btn.hasAttribute('disabled')) {
+                  btn.scrollIntoView({ block: 'center' });
+                  btn.click();
+                  return true;
+                }
+                return false;
+              }).catch(() => false);
+
+              if (!nextClicked) {
+                await this.clickVisibleElement(page, [
+                  '#next-button',
+                  'ytcp-button#next-button',
+                  'button:has-text("Next")',
+                ]);
+              }
+              await page.waitForTimeout(2000);
+            }
+
+            // Visibility step: Select "Public"
+            await page.waitForTimeout(1200);
+            await page.evaluate(() => {
+              const pubRadio = document.querySelector(
+                'tp-yt-paper-radio-button[name="PUBLIC"], #public-radio-button, [name="PUBLIC"]'
+              ) as HTMLElement | null;
+              if (pubRadio) {
+                pubRadio.scrollIntoView({ block: 'center', inline: 'center' });
+                const target = pubRadio.querySelector('#radio') as HTMLElement | null || pubRadio;
+                target.click();
+                return true;
+              }
+              const all = Array.from(document.querySelectorAll('tp-yt-paper-radio-button, [role="radio"]'));
+              const found = all.find((r) =>
+                ((r as HTMLElement).innerText || '').trim().startsWith('Public')
+              ) as HTMLElement | null;
+              if (found) {
+                found.scrollIntoView({ block: 'center', inline: 'center' });
+                const target = found.querySelector('#radio') as HTMLElement | null || found;
+                target.click();
+                return true;
+              }
+              return false;
+            }).catch(() => false);
+
+            this.emitLog('upload', 'Selected "Public" visibility on YouTube Studio', account.id);
+            await page.waitForTimeout(1500);
+
+            // Click Save / Publish
+            if (!isDryRun) {
+              await page.evaluate(() => {
+                const doneBtn = document.querySelector('#done-button, ytcp-button#done-button') as HTMLElement | null;
+                if (doneBtn && !doneBtn.hasAttribute('disabled')) {
+                  doneBtn.click();
+                }
+              }).catch(() => {});
+
+              await this.clickVisibleElement(page, [
+                '#done-button:has-text("Publish")',
+                'ytcp-button#done-button:has-text("Publish")',
+                'button:has-text("Publish")',
+                '#done-button',
+                'ytcp-button#done-button',
+                'button:has-text("Save")',
+              ]);
+              this.emitLog('upload', 'Clicked Publish on YouTube Studio', account.id);
+              await page.waitForTimeout(2000);
+            } else {
+              this.emitLog('upload', '[Test Mode] Staged up to Public visibility on YouTube Studio', account.id);
+            }
+          }
+
+          // =========================================================================
+          // 4. INSTAGRAM: Click "+ Create" -> Click "Post" in submenu -> Attach video -> Next -> Next -> Caption
+          // =========================================================================
+          else if (account.id === 'instagram') {
+            await this.clickVisibleElement(page, [
+              'a:has-text("Create")',
+              'span:text-is("Create")',
+              'svg[aria-label="New post"]',
+            ]);
+            await page.waitForTimeout(1000);
+
+            // If clicking "+ Create" opened the submenu ("Post", "Live video", "Ad"), click the visible "Post" item
+            await this.clickVisibleElement(page, [
+              'span:text-is("Post")',
+              'a:has-text("Post")',
+              'div[role="button"]:has-text("Post")',
+              '[role="menuitem"]:has-text("Post")',
+            ]);
+            await page.waitForTimeout(1500);
+
+            if (hasVideoFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 70,
+                message: `Attaching "${payload.videoFileName}" to Instagram post modal...`,
+              });
+
+              const igFileInputs = await page.$$('input[type="file"]');
+              if (igFileInputs.length > 0) {
+                // Use the last file input (inside the newly opened Create Post modal)
+                await igFileInputs[igFileInputs.length - 1].setInputFiles(payload.videoPath);
+                this.emitLog('upload', `Attached "${payload.videoFileName}" on Instagram`, account.id);
+              } else {
+                const fcPromise = page
+                  .waitForEvent('filechooser', { timeout: 4500 })
+                  .catch(() => null);
+                const clickedSelectBtn = await this.clickVisibleElement(page, [
+                  'button:has-text("Select from computer")',
+                  'div[role="button"]:has-text("Select from computer")',
+                ]);
+                if (clickedSelectBtn) {
+                  const fc = await fcPromise;
+                  if (fc) {
+                    await fc.setFiles(payload.videoPath);
+                    this.emitLog('upload', `Attached "${payload.videoFileName}" on Instagram`, account.id);
+                  }
+                }
+              }
+
+              await page.waitForTimeout(3000);
+
+              // Dismiss "Video posts are now shared as reels" -> "OK" popup if shown
+              await this.clickVisibleElement(page, [
+                'button:has-text("OK")',
+                'div[role="button"]:has-text("OK")',
+              ]);
+              await page.waitForTimeout(600);
+
+              // On the Crop screen: click the bottom-left two-arrow icon ("Select crop") and then click "9:16"
+              const clickedCropToggle = await this.clickVisibleElement(page, [
+                'button:has(svg[aria-label="Select crop"])',
+                'div[role="button"]:has(svg[aria-label="Select crop"])',
+                'svg[aria-label="Select crop"]',
+                '[aria-label="Select crop"]',
+              ]);
+              if (clickedCropToggle) {
+                await page.waitForTimeout(800);
+                await this.clickVisibleElement(page, [
+                  'span:text-is("9:16")',
+                  'div[role="button"]:has-text("9:16")',
+                  'button:has-text("9:16")',
+                  'svg[aria-label="Crop portrait icon"]',
+                ]);
+                this.emitLog('upload', 'Selected 9:16 aspect ratio crop on Instagram', account.id);
+                await page.waitForTimeout(1000);
+              }
+
+              // Advance to Edit/Cover screen (1st "Next")
+              await page
+                .waitForSelector('div[role="button"]:has-text("Next"), button:has-text("Next")', {
+                  state: 'visible',
+                  timeout: 6000,
+                })
+                .catch(() => null);
+              await this.clickVisibleElement(page, [
+                'div[role="button"]:has-text("Next")',
+                'button:has-text("Next")',
+              ]);
+              await page.waitForTimeout(2000);
+
+              // Thumbnail on Edit/Cover screen: click "Select from computer" near the cover photo title
+              if (hasThumbnailFile) {
+                onStatusUpdate({
+                  platform: account.id,
+                  status: 'uploading_file',
+                  progress: 85,
+                  message: `Uploading cover photo on Instagram...`,
+                });
+                const igThumbFcPromise = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+                const clickedSelectThumb = await this.clickVisibleElement(page, [
+                  'button:has-text("Select from computer")',
+                  'div[role="button"]:has-text("Select from computer")',
+                  'span:has-text("Select from computer")',
+                  'label:has-text("Select from computer")',
+                ]);
+                const igThumbFc = await igThumbFcPromise;
+                if (igThumbFc) {
+                  await igThumbFc.setFiles(payload.thumbnailPath!);
+                  this.emitLog('upload', 'Uploaded cover photo on Instagram', account.id);
+                } else {
+                  const coverInputs = await page.$$('input[type="file"]');
+                  if (coverInputs.length > 0) {
+                    await coverInputs[coverInputs.length - 1].setInputFiles(payload.thumbnailPath!);
+                    this.emitLog('upload', 'Uploaded cover photo on Instagram via file input', account.id);
+                  }
+                }
+                await page.waitForTimeout(1500);
+              }
+
+              // Advance to Caption screen (2nd "Next")
+              await page
+                .waitForSelector('div[role="button"]:has-text("Next"), button:has-text("Next")', {
+                  state: 'visible',
+                  timeout: 6000,
+                })
+                .catch(() => null);
+              await this.clickVisibleElement(page, [
+                'div[role="button"]:has-text("Next")',
+                'button:has-text("Next")',
+              ]);
+              await page.waitForTimeout(1800);
+            }
+
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 90,
+              message: `Filling caption on Instagram (Title then Tags)...`,
+            });
+            // Instagram must only show Title then Tags
+            await this.clearAndInsertText(
+              page,
+              'div[aria-label="Write a caption..."][contenteditable="true"], div[role="textbox"][contenteditable="true"]',
+              titleAndTagsCaption,
+              10000
+            );
+
+            // If not test mode, click "Share"
+            if (!isDryRun) {
+              await page.waitForTimeout(1000);
+              const clickedShare = await this.clickVisibleElement(page, [
+                'div[role="button"]:text-is("Share")',
+                'button:text-is("Share")',
+                'div[role="button"]:has-text("Share")',
+                'button:has-text("Share")',
+                'header button:has-text("Share")',
+              ]);
+              if (clickedShare) {
+                this.emitLog('upload', 'Clicked "Share" on Instagram', account.id);
+                await page.waitForTimeout(4000);
+              }
+            }
+          }
+
+          // =========================================================================
+          // 5. TIKTOK STUDIO: Dismiss "Got it" tutorial popups, upload video, clear default filename, paste caption
+          // =========================================================================
+          else if (account.id === 'tiktok') {
+            await this.dismissTikTokPopups(page);
+
+            if (hasVideoFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 70,
+                message: `Staging "${payload.videoFileName}" on TikTok Studio...`,
+              });
+              const fileInput = await page
+                .waitForSelector('input[type="file"]', { state: 'attached', timeout: 8000 })
+                .catch(() => null);
+              if (fileInput) {
+                await fileInput.setInputFiles(payload.videoPath);
+                this.emitLog(
+                  'upload',
+                  `Staged "${payload.videoFileName}" into TikTok Studio`,
+                  account.id
+                );
+                await page.waitForTimeout(2500);
+              }
+            }
+
+            // Dismiss any "Got it" tutorial popups that appear after video attachment
+            await this.dismissTikTokPopups(page);
+            await page.waitForTimeout(1000);
+            await this.dismissTikTokPopups(page);
+
+            // Thumbnail for TikTok Studio: Click "Edit cover", then "Upload cover" on the bottom of dialog, upload, click "Save"
+            if (hasThumbnailFile) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 85,
+                message: `Uploading cover image on TikTok Studio...`,
+              });
+
+              // Wait up to 15 seconds for the video processing to finish and the "Edit cover" thumbnail trigger to appear
+              const editCoverSelector =
+                'button:has-text("Edit cover"), div[role="button"]:has-text("Edit cover"), span:has-text("Edit cover"), [class*="cover"] button, [class*="Cover"] button, [class*="edit-cover"]';
+
+              await page
+                .waitForSelector(editCoverSelector, { state: 'visible', timeout: 15000 })
+                .catch(() => null);
+
+              // Click "Edit cover" (or click directly on the cover preview card if that's what's interactive)
+              const clickedEditCover = await this.clickVisibleElement(page, [
+                'button:has-text("Edit cover")',
+                'div[role="button"]:has-text("Edit cover")',
+                'span:text-is("Edit cover")',
+                'span:has-text("Edit cover")',
+                '[class*="editCover"]',
+                '[class*="cover-edit"]',
+                '.cover-edit-btn',
+              ]);
+
+              if (!clickedEditCover) {
+                // If the text button wasn't clicked, try clicking the cover preview box/card itself
+                await this.clickVisibleElement(page, [
+                  '[class*="cover-container"]',
+                  '[class*="cover-preview"]',
+                  '[class*="CoverPreview"]',
+                  '[class*="coverCard"]',
+                ]);
+              }
+
+              await page.waitForTimeout(2000);
+
+              // Intercept filechooser when clicking "Upload cover" tab / button inside the Edit Cover modal
+              const ttThumbFcPromise = page.waitForEvent('filechooser', { timeout: 6000 }).catch(() => null);
+              const clickedUploadCover = await this.clickVisibleElement(page, [
+                'div[role="tab"]:has-text("Upload cover")',
+                'button:has-text("Upload cover")',
+                'div[role="button"]:has-text("Upload cover")',
+                'span:has-text("Upload cover")',
+                'div:text-is("Upload cover")',
+                '.upload-cover-btn',
+                '[class*="uploadCover"]',
+              ]);
+
+              const ttThumbFc = await ttThumbFcPromise;
+              if (ttThumbFc) {
+                await ttThumbFc.setFiles(payload.thumbnailPath!);
+                this.emitLog('upload', 'Attached cover image on TikTok Studio via filechooser', account.id);
+              } else {
+                // Check if an input[type="file"] is present in the cover dialog
+                const ttCoverInputs = await page.$$('input[type="file"]');
+                if (ttCoverInputs.length > 0) {
+                  // Usually the last file input is the one added for the modal
+                  await ttCoverInputs[ttCoverInputs.length - 1].setInputFiles(payload.thumbnailPath!);
+                  this.emitLog('upload', 'Attached cover image on TikTok Studio via file input', account.id);
+                } else if (clickedUploadCover) {
+                  // If we clicked tab first, there may be a "Select file" / "Upload" button inside the tab
+                  const ttThumbFc2Promise = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+                  await this.clickVisibleElement(page, [
+                    'button:has-text("Select file")',
+                    'button:has-text("Upload")',
+                    'div[role="button"]:has-text("Select file")',
+                    'span:has-text("Select file")',
+                  ]);
+                  const ttThumbFc2 = await ttThumbFc2Promise;
+                  if (ttThumbFc2) {
+                    await ttThumbFc2.setFiles(payload.thumbnailPath!);
+                    this.emitLog('upload', 'Attached cover image on TikTok Studio via tab filechooser', account.id);
+                  }
+                }
+              }
+
+              // After image is attached, TikTok takes a moment to process the crop / preview before enabling "Save"
+              await page.waitForTimeout(2000);
+
+              // Click the pink "Save" button in the top right header (next to "Cancel")
+              let saved = false;
+              for (let attempt = 0; attempt < 5; attempt++) {
+                // Priority 1: Specifically find button that contains exact text "Save" and has red/pink background or is next to Cancel
+                saved = await page.evaluate(() => {
+                  const buttons = Array.from(document.querySelectorAll('button'));
+                  // Find the top-right header "Save" button
+                  const saveBtn = buttons.find((b) => {
+                    const text = (b.innerText || '').trim();
+                    if (text !== 'Save') return false;
+                    const rect = b.getBoundingClientRect();
+                    // In the screenshot, the Save button is in the top-right quadrant (rect.top < 300, rect.right > 600)
+                    return rect.width > 0 && rect.height > 0 && !b.disabled;
+                  });
+                  if (saveBtn) {
+                    saveBtn.click();
+                    return true;
+                  }
+                  return false;
+                }).catch(() => false);
+
+                if (!saved) {
+                  saved = await this.clickVisibleElement(page, [
+                    'button.primary:has-text("Save")',
+                    'button[class*="primary"]:has-text("Save")',
+                    'button[data-e2e*="save"]:has-text("Save")',
+                    'button:text-is("Save")',
+                  ]);
+                }
+
+                if (saved) {
+                  this.emitLog('upload', 'Clicked Save on TikTok cover modal header', account.id);
+                  break;
+                }
+                await page.waitForTimeout(1000);
+              }
+              await page.waitForTimeout(1500);
+            }
+
+            onStatusUpdate({
+              platform: account.id,
+              status: 'filling_metadata',
+              progress: 90,
+              message: `Clearing default filename & setting caption on TikTok Studio...`,
+            });
+
+            const tiktokCaptionSelector =
+              '.public-DraftEditor-content[contenteditable="true"], .caption-editor [contenteditable="true"], [contenteditable="true"]';
+            const captionEl = await page
+              .waitForSelector(tiktokCaptionSelector, { timeout: 12000 })
+              .catch(() => null);
+
+            if (captionEl) {
+              await this.dismissTikTokPopups(page);
+              // Wait briefly to ensure TikTok has finished auto-filling the filename (e.g. "11-5-26")
+              await page.waitForTimeout(800);
+              // TikTok should just be Title + Tags (single line below, no empty gap)
+              await this.clearAndInsertText(page, tiktokCaptionSelector, titleAndTagsCaption);
+              await page.keyboard.press('Escape').catch(() => {});
+
+              // If not test mode, click "Post"
+              if (!isDryRun) {
+                await page.waitForTimeout(1500);
+                // Scroll down to ensure post button is in view
+                await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+                await page.waitForTimeout(500);
+                const clickedPost = await this.clickVisibleElement(page, [
+                  'button[data-e2e*="post"]:has-text("Post")',
+                  'button.btn-post:has-text("Post")',
+                  'button:text-is("Post")',
+                  'button:has-text("Post")',
+                ]);
+                if (clickedPost) {
+                  this.emitLog('upload', 'Clicked "Post" on TikTok Studio', account.id);
+                  await page.waitForTimeout(4000);
+                }
+              }
+            }
+          }
+        } catch (err: any) {
+          this.emitLog(
+            'upload',
+            `Staging note on ${account.name}: ${err?.message || 'ready'}`,
+            account.id
+          );
+        }
+      }
+
       await delay(400);
 
       onStatusUpdate({
         platform: account.id,
         status: 'completed',
         progress: 100,
-        message: `Ready / Published "${payload.title}" on ${account.name}`,
+        message: isDryRun
+          ? `Staged in browser (Not Published) — "${payload.title}" on ${account.name}`
+          : `Ready / Staged "${payload.title}" on ${account.name}`,
         postUrl: account.uploadUrl,
         completedAt: new Date().toLocaleTimeString(),
       });
       this.emitLog(
         'upload',
-        `Completed upload automation flow for "${payload.title}" on ${account.name}.`,
+        isDryRun
+          ? `[Test Mode] Staged "${payload.title}" on ${account.name} without publishing. Browser left open for inspection.`
+          : `Completed upload staging for "${payload.title}" on ${account.name}.`,
         account.id
       );
     }

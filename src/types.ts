@@ -57,10 +57,13 @@ export interface VideoUploadPayload {
   videoPath: string;
   videoFileName: string;
   videoSizeBytes: number;
+  thumbnailPath?: string;
+  thumbnailFileName?: string;
   title: string;
   description: string;
   tags: string;
   platforms: PlatformId[];
+  dryRun?: boolean;
 }
 
 export interface PlatformUploadStatus {

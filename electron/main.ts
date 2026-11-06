@@ -30,7 +30,7 @@ const initialAccounts: PlatformAccount[] = [
     name: 'LinkedIn',
     handle: '',
     profileUrl: 'https://www.linkedin.com',
-    uploadUrl: 'https://www.linkedin.com/feed/',
+    uploadUrl: 'https://www.linkedin.com/sharing/compose',
     analyticsUrl: 'https://www.linkedin.com/analytics/creator/content/',
     linked: false,
     lastSyncedAt: null,
@@ -42,7 +42,7 @@ const initialAccounts: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://www.youtube.com',
     uploadUrl: 'https://studio.youtube.com',
-    analyticsUrl: 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview',
+    analyticsUrl: 'https://studio.youtube.com/',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -158,7 +158,7 @@ function createWindow() {
     minWidth: 1120,
     minHeight: 740,
     title: 'My Manager — Social Media Management App',
-    backgroundColor: '#020617',
+    backgroundColor: '#f8fafc',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -248,24 +248,44 @@ app.whenReady().then(() => {
 
   ipcMain.handle('stats:get-initial', async () => statsStore);
 
+  let pollInFlight: Promise<Record<PlatformId, PlatformStats>> | null = null;
+
   ipcMain.handle('stats:poll-browser', async (_event, platforms?: PlatformId[]) => {
     if (!browserAgent) return statsStore;
-    const linkedTargets = accountsStore.filter(
-      (a) => a.linked && (!platforms || platforms.includes(a.id))
-    );
-    // If user clicked "Fetch via LLM Browser Now" and has accounts with handles or linked accounts, scrape them
-    const targets =
-      linkedTargets.length > 0
-        ? linkedTargets
-        : accountsStore.filter((a) => a.handle.trim().length > 0);
-
-    for (const acc of targets) {
-      statsStore[acc.id] = await browserAgent.scrapePlatformStats(
-        acc,
-        statsStore[acc.id]
-      );
+    if (pollInFlight) {
+      return await pollInFlight;
     }
-    return statsStore;
+
+    pollInFlight = (async () => {
+      try {
+        // Twitter / X is excluded from stats tracking (kept for uploads only)
+        const statEligible = accountsStore.filter((a) => a.id !== 'twitter');
+        const linkedTargets = statEligible.filter(
+          (a) => a.linked && (!platforms || platforms.includes(a.id))
+        );
+        const targets =
+          linkedTargets.length > 0
+            ? linkedTargets
+            : statEligible.filter(
+                (a) =>
+                  a.handle.trim().length > 0 &&
+                  (!platforms || platforms.includes(a.id))
+              );
+
+        for (const acc of targets) {
+          statsStore[acc.id] = await browserAgent!.scrapePlatformStats(
+            acc,
+            statsStore[acc.id]
+          );
+        }
+        return statsStore;
+      } finally {
+        await browserAgent?.closeContextIfHeadless();
+        pollInFlight = null;
+      }
+    })();
+
+    return await pollInFlight;
   });
 
   ipcMain.handle('video:select-file', async () => {
@@ -284,6 +304,23 @@ app.whenReady().then(() => {
       videoPath: filePath,
       videoFileName: path.basename(filePath),
       videoSizeBytes: stat.size,
+    };
+  });
+
+  ipcMain.handle('thumbnail:select-file', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Video Thumbnail / Cover Image',
+      filters: [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] },
+      ],
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const filePath = result.filePaths[0];
+    return {
+      thumbnailPath: filePath,
+      thumbnailFileName: path.basename(filePath),
     };
   });
 
@@ -308,6 +345,10 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on('before-quit', async () => {
+  await browserAgent?.closeContext();
 });
 
 app.on('window-all-closed', () => {

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('myManagerApi', {
   pollBrowserStats: (platforms?: PlatformId[]) =>
     ipcRenderer.invoke('stats:poll-browser', platforms),
   selectVideoFile: () => ipcRenderer.invoke('video:select-file'),
+  selectThumbnailFile: () => ipcRenderer.invoke('thumbnail:select-file'),
   replicateVideoUpload: (payload: VideoUploadPayload) =>
     ipcRenderer.invoke('video:upload-replicate', payload),
   getLlmConfig: () => ipcRenderer.invoke('llm:get-config'),
