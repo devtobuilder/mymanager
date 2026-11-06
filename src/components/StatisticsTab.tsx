@@ -21,6 +21,7 @@ import {
   Pause,
   TrendingUp,
   Cpu,
+  Users,
 } from 'lucide-react';
 import {
   PlatformAccount,
@@ -121,7 +122,7 @@ export const StatisticsTab: React.FC<StatisticsTabProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Autonomous Playwright + Ollama DOM agent extracting real-time Views, Likes & Comments with randomized 9–11s anti-bot jitter
+              Autonomous Playwright + Ollama DOM agent extracting real-time Views, Likes, Comments & Followers with randomized 20–30s anti-bot jitter
             </p>
           </div>
         </div>
@@ -322,30 +323,56 @@ export const StatisticsTab: React.FC<StatisticsTabProps> = ({
               </div>
 
               <div className="mt-4 space-y-2 border-t border-slate-800/80 pt-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Eye className="h-3.5 w-3.5 text-indigo-400" /> Views
-                  </span>
-                  <span className="font-mono font-bold text-white">
-                    {(s?.views || 0).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Heart className="h-3.5 w-3.5 text-rose-400" /> Likes
-                  </span>
-                  <span className="font-mono font-bold text-rose-300">
-                    {(s?.likes || 0).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <MessageSquare className="h-3.5 w-3.5 text-amber-400" /> Comments
-                  </span>
-                  <span className="font-mono font-bold text-amber-300">
-                    {(s?.comments || 0).toLocaleString()}
-                  </span>
-                </div>
+                {acc.id === 'twitter' ? (
+                  <>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <Users className="h-3.5 w-3.5 text-sky-400" /> Followers
+                      </span>
+                      <span className="font-mono text-base font-bold text-white">
+                        {(s?.followers || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Follower count only (X stats disabled)
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <Eye className="h-3.5 w-3.5 text-indigo-400" /> Views
+                      </span>
+                      <span className="font-mono font-bold text-white">
+                        {(s?.views || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <Heart className="h-3.5 w-3.5 text-rose-400" /> Likes
+                      </span>
+                      <span className="font-mono font-bold text-rose-300">
+                        {(s?.likes || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <MessageSquare className="h-3.5 w-3.5 text-amber-400" /> Comments
+                      </span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {(s?.comments || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <Users className="h-3.5 w-3.5 text-emerald-400" /> Followers
+                      </span>
+                      <span className="font-mono font-bold text-emerald-300">
+                        {(s?.followers || 0).toLocaleString()}
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           );

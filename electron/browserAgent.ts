@@ -51,96 +51,82 @@ export function CleanHandle(account: PlatformAccount): string {
 
 export function resolveAccountUrl(account: PlatformAccount, mode: 'profile' | 'analytics'): string {
   const clean = CleanHandle(account);
-  if (!clean) {
-    return mode === 'analytics' ? account.analyticsUrl : account.profileUrl;
-  }
 
   switch (account.id) {
     case 'twitter':
-      return mode === 'analytics'
-        ? `https://x.com/${clean}/with_replies`
-        : `https://x.com/${clean}`;
+      return clean ? `https://x.com/${clean}` : account.profileUrl;
     case 'linkedin':
-      return mode === 'analytics'
-        ? `https://www.linkedin.com/in/${clean}/recent-activity/all/`
-        : `https://www.linkedin.com/in/${clean}/`;
+      if (mode === 'analytics') {
+        return 'https://www.linkedin.com/analytics/creator/content/';
+      }
+      return clean ? `https://www.linkedin.com/in/${clean}/` : account.profileUrl;
     case 'youtube':
-      return mode === 'analytics'
-        ? `https://www.youtube.com/@${clean}/shorts`
-        : `https://www.youtube.com/@${clean}`;
+      if (mode === 'analytics') {
+        return 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview';
+      }
+      return clean ? `https://www.youtube.com/@${clean}` : account.profileUrl;
     case 'instagram':
-      return mode === 'analytics'
-        ? `https://www.instagram.com/${clean}/reels/`
-        : `https://www.instagram.com/${clean}/`;
+      if (mode === 'analytics') {
+        return 'https://www.instagram.com/accounts/insights';
+      }
+      return clean ? `https://www.instagram.com/${clean}/` : account.profileUrl;
     case 'tiktok':
-      return mode === 'analytics'
-        ? `https://www.tiktok.com/tiktokstudio/content`
-        : `https://www.tiktok.com/@${clean}`;
+      if (mode === 'analytics') {
+        return 'https://www.tiktok.com/tiktokstudio';
+      }
+      return clean ? `https://www.tiktok.com/@${clean}` : account.profileUrl;
   }
 }
 
 /**
- * Returns an ordered list of the most metric-rich URLs for a platform.
- * Visiting content tabs (/shorts, /videos, /reels, /recent-activity/all, /tiktokstudio/content)
- * exposes per-post Views, Likes, and Comments that bare profile homepages hide.
+ * Returns the single dedicated analytics/insights URL to extract live metrics from:
+ * - Instagram: https://www.instagram.com/accounts/insights
+ * - YouTube: https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview
+ * - LinkedIn: https://www.linkedin.com/analytics/creator/content/
+ * - TikTok: https://www.tiktok.com/tiktokstudio
+ * - Twitter / X: https://x.com/{handle} (follower count only)
+ *
+ * Never navigates away to a secondary profile page after landing on the requested page.
  */
 export function resolveExtractionPages(account: PlatformAccount): Array<{ label: string; url: string }> {
   const clean = CleanHandle(account);
 
   switch (account.id) {
-    case 'youtube': {
-      if (!clean) {
-        return [
-          { label: 'YouTube Studio Content', url: 'https://studio.youtube.com' },
-          { label: 'YouTube Studio Analytics', url: account.analyticsUrl },
-        ];
-      }
+    case 'youtube':
       return [
-        { label: 'YouTube Shorts Feed', url: `https://www.youtube.com/@${clean}/shorts` },
-        { label: 'YouTube Videos Tab', url: `https://www.youtube.com/@${clean}/videos` },
-        { label: 'YouTube Studio', url: 'https://studio.youtube.com' },
+        {
+          label: 'YouTube Studio Analytics Hub',
+          url: 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview',
+        },
       ];
-    }
-    case 'instagram': {
-      if (!clean) {
-        return [{ label: 'Instagram Insights', url: account.analyticsUrl }];
-      }
+    case 'instagram':
       return [
-        { label: 'Instagram Reels Tab', url: `https://www.instagram.com/${clean}/reels/` },
-        { label: 'Instagram Posts Grid', url: `https://www.instagram.com/${clean}/` },
+        {
+          label: 'Instagram Account Insights',
+          url: 'https://www.instagram.com/accounts/insights',
+        },
       ];
-    }
-    case 'tiktok': {
-      if (!clean) {
-        return [
-          { label: 'TikTok Studio Content', url: 'https://www.tiktok.com/tiktokstudio/content' },
-          { label: 'TikTok Studio Analytics', url: account.analyticsUrl },
-        ];
-      }
+    case 'tiktok':
       return [
-        { label: 'TikTok Studio Content', url: 'https://www.tiktok.com/tiktokstudio/content' },
-        { label: 'TikTok Creator Profile & Grid', url: `https://www.tiktok.com/@${clean}` },
+        {
+          label: 'TikTok Studio',
+          url: 'https://www.tiktok.com/tiktokstudio',
+        },
       ];
-    }
-    case 'twitter': {
-      if (!clean) {
-        return [{ label: 'X Analytics', url: 'https://x.com/i/account_analytics' }];
-      }
+    case 'linkedin':
       return [
-        { label: 'X Posts & Replies Timeline', url: `https://x.com/${clean}` },
-        { label: 'X Account Analytics', url: 'https://x.com/i/account_analytics' },
+        {
+          label: 'LinkedIn Creator Content Analytics',
+          url: 'https://www.linkedin.com/analytics/creator/content/',
+        },
       ];
-    }
-    case 'linkedin': {
-      if (!clean) {
-        return [{ label: 'LinkedIn Creator Analytics', url: 'https://www.linkedin.com/analytics/' }];
-      }
+    case 'twitter':
       return [
-        { label: 'LinkedIn Recent Activity & Posts', url: `https://www.linkedin.com/in/${clean}/recent-activity/all/` },
-        { label: 'LinkedIn Creator Analytics', url: 'https://www.linkedin.com/analytics/' },
-        { label: 'LinkedIn Profile', url: `https://www.linkedin.com/in/${clean}/` },
+        {
+          label: 'X Profile (Follower Count)',
+          url: clean ? `https://x.com/${clean}` : account.profileUrl,
+        },
       ];
-    }
   }
 }
 
@@ -149,8 +135,10 @@ function parseCompactNumber(raw: string | number | undefined | null): number | n
     return Number.isFinite(raw) ? Math.round(raw) : null;
   }
   if (!raw || typeof raw !== 'string') return null;
-  const cleaned = raw.replace(/,/g, '').trim().toUpperCase();
-  const match = cleaned.match(/(\d+(?:\.\d+)?)\s*([KMB])?/);
+  // Reject percentages (e.g. "4.2%", "66%") or dates/times
+  if (raw.includes('%') || raw.includes(':')) return null;
+  const cleaned = raw.replace(/,/g, '').replace(/^\+/, '').trim().toUpperCase();
+  const match = cleaned.match(/^(\d+(?:\.\d+)?)\s*([KMB])?$/);
   if (!match) return null;
   const num = parseFloat(match[1]);
   if (isNaN(num)) return null;
@@ -161,50 +149,154 @@ function parseCompactNumber(raw: string | number | undefined | null): number | n
   return Math.round(num);
 }
 
-function sumCompactMatches(text: string, regex: RegExp): number {
-  let total = 0;
-  let found = false;
-  const flags = regex.flags.includes('g') ? regex.flags : `${regex.flags}g`;
-  const globalRegex = new RegExp(regex.source, flags);
-  let match: RegExpExecArray | null;
-  while ((match = globalRegex.exec(text)) !== null) {
-    const parsed = parseCompactNumber(match[1]);
-    if (parsed !== null && parsed >= 0) {
-      total += parsed;
-      found = true;
-    }
-  }
-  return found ? total : -1;
+/**
+ * Parses clean non-empty lines from page innerText.
+ */
+function splitLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
 }
 
-function extractMetricsFromText(text: string): Partial<PlatformStats> {
+/**
+ * Finds the first valid compact number immediately following (or 2 lines after, e.g. when "--" or "Cumulative" sits between)
+ * a line matching `labelRegex`.
+ */
+function findNumberAfterLabel(lines: string[], labelRegex: RegExp, startIndex = 0): number | null {
+  for (let i = startIndex; i < lines.length; i++) {
+    if (labelRegex.test(lines[i])) {
+      const next1 = lines[i + 1] || '';
+      const val1 = parseCompactNumber(next1);
+      if (val1 !== null) return val1;
+
+      // Handle "--\n0" or "Cumulative\n128"
+      const next2 = lines[i + 2] || '';
+      if (next1 === '--' || /^cumulative$/i.test(next1)) {
+        const val2 = parseCompactNumber(next2);
+        if (val2 !== null) return val2;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds the first valid compact number immediately preceding a line matching `labelRegex`
+ * (e.g. "128\nImpressions" on LinkedIn or "9\nTotal followers" on Instagram).
+ */
+function findNumberBeforeLabel(lines: string[], labelRegex: RegExp, startIndex = 0): number | null {
+  for (let i = Math.max(1, startIndex); i < lines.length; i++) {
+    if (labelRegex.test(lines[i])) {
+      const prev = lines[i - 1] || '';
+      const val = parseCompactNumber(prev);
+      if (val !== null) return val;
+    }
+  }
+  return null;
+}
+
+function extractMetricsFromText(text: string, platform?: PlatformId): Partial<PlatformStats> {
   const result: Partial<PlatformStats> = {};
 
+  if (platform === 'instagram') {
+    const lines = splitLines(text);
+    const views = findNumberAfterLabel(lines, /^Views$/i);
+    const likes =
+      findNumberAfterLabel(lines, /^Interactions$/i) ??
+      findNumberAfterLabel(lines, /^Likes$/i) ??
+      findNumberAfterLabel(lines, /^Accounts engaged$/i);
+    const comments = findNumberAfterLabel(lines, /^Comments$/i) ?? 0;
+    const followers =
+      findNumberBeforeLabel(lines, /^Total followers$/i) ??
+      findNumberAfterLabel(lines, /^Total followers$/i) ??
+      findNumberAfterLabel(lines, /^Followers$/i);
+
+    if (views !== null) result.views = views;
+    if (likes !== null) result.likes = likes;
+    result.comments = comments;
+    if (followers !== null) result.followers = followers;
+    return result;
+  }
+
+  if (platform === 'youtube') {
+    const lines = splitLines(text);
+    const keyIdx = lines.findIndex((l) => /^Key metrics$/i.test(l));
+    const views =
+      findNumberAfterLabel(lines, /^Views$/i, keyIdx >= 0 ? keyIdx : 0) ??
+      findNumberAfterLabel(lines, /^Views$/i);
+    const followers =
+      findNumberAfterLabel(lines, /^Total subscribers$/i) ??
+      findNumberAfterLabel(lines, /^Subscribers$/i);
+    const likes = findNumberAfterLabel(lines, /^Likes$/i) ?? 0;
+    const comments = findNumberAfterLabel(lines, /^Comments$/i) ?? 0;
+
+    if (views !== null) result.views = views;
+    if (followers !== null) result.followers = followers;
+    result.likes = likes;
+    result.comments = comments;
+    return result;
+  }
+
+  if (platform === 'linkedin') {
+    const lines = splitLines(text);
+    const views =
+      findNumberAfterLabel(lines, /^Impressions$/i) ??
+      findNumberBeforeLabel(lines, /^Impressions$/i);
+    const likes =
+      findNumberAfterLabel(lines, /^Reactions$/i) ??
+      findNumberBeforeLabel(lines, /^Reactions$/i) ??
+      findNumberBeforeLabel(lines, /^Social engagements$/i);
+    const comments =
+      findNumberAfterLabel(lines, /^Comments$/i) ??
+      findNumberBeforeLabel(lines, /^Comments$/i) ??
+      0;
+    const followers =
+      findNumberAfterLabel(lines, /^(?:Total followers|Followers)$/i) ??
+      findNumberBeforeLabel(lines, /^(?:Total followers|Followers)$/i);
+
+    if (views !== null) result.views = views;
+    if (likes !== null) result.likes = likes;
+    result.comments = comments;
+    if (followers !== null) result.followers = followers;
+    return result;
+  }
+
+  if (platform === 'tiktok') {
+    // Strip out the "Inspiration / Trending" feed at the bottom of TikTok Studio so viral videos aren't parsed
+    const creatorOnlyText = text.split(/\n(?:Inspiration|Trending|Related posts)\n/i)[0] || text;
+    const lines = splitLines(creatorOnlyText);
+    const keyIdx = lines.findIndex((l) => /^Key metrics$/i.test(l));
+
+    const views =
+      findNumberAfterLabel(lines, /^(?:Video views|Post views|Views)$/i, keyIdx >= 0 ? keyIdx : 0) ??
+      findNumberAfterLabel(lines, /^(?:Video views|Post views|Views)$/i);
+    const followers = findNumberAfterLabel(lines, /^Followers$/i);
+    const likes =
+      findNumberAfterLabel(lines, /^Likes$/i, keyIdx >= 0 ? keyIdx : 0) ??
+      findNumberAfterLabel(lines, /^Likes$/i);
+    const comments =
+      findNumberAfterLabel(lines, /^Comments$/i, keyIdx >= 0 ? keyIdx : 0) ??
+      findNumberAfterLabel(lines, /^Comments$/i) ??
+      0;
+
+    if (views !== null) result.views = views;
+    if (followers !== null) result.followers = followers;
+    if (likes !== null) result.likes = likes;
+    result.comments = comments;
+    return result;
+  }
+
+  // Twitter / X or generic fallback
   const followerMatch = text.match(
-    /(\d+(?:[.,]\d+)?\s*[KMB]?)\s*(?:Followers|Subscribers|followers|subscribers)/i
+    /(\d+(?:[.,]\d+)?[ \t]*[KMB]?)[ \t]+(?:Followers|Subscribers|followers|subscribers)\b/i
   );
   if (followerMatch?.[1]) {
     const parsed = parseCompactNumber(followerMatch[1]);
-    if (parsed !== null) result.followers = parsed;
+    if (parsed !== null) {
+      result.followers = parsed;
+    }
   }
-
-  const totalViews = sumCompactMatches(
-    text,
-    /(\d+(?:[.,]\d+)?\s*[KMB]?)\s*(?:Views|views|Post impressions|Impressions|impressions|plays|Plays)/gi
-  );
-  if (totalViews >= 0) result.views = totalViews;
-
-  const totalLikes = sumCompactMatches(
-    text,
-    /(\d+(?:[.,]\d+)?\s*[KMB]?)\s*(?:Likes|likes|Reactions|reactions)/gi
-  );
-  if (totalLikes >= 0) result.likes = totalLikes;
-
-  const totalComments = sumCompactMatches(
-    text,
-    /(\d+(?:[.,]\d+)?\s*[KMB]?)\s*(?:Comments|Replies|comments|replies)/gi
-  );
-  if (totalComments >= 0) result.comments = totalComments;
 
   return result;
 }
@@ -341,24 +433,11 @@ function harvestJsonMetrics(
     }
   }
 
-  // Twitter / X GraphQL structures
+  // Twitter / X GraphQL structures (Follower count only)
   if (platform === 'twitter') {
     if (typeof data.followers_count === 'number') {
       acc.followers = Math.max(acc.followers, data.followers_count);
       acc.hasFollowers = true;
-    }
-    const restId = String(data.rest_id || '');
-    if (data.legacy && data.legacy.favorite_count !== undefined && restId && !acc.seenMediaIds.has(`tw-${restId}`)) {
-      acc.seenMediaIds.add(`tw-${restId}`);
-      const v = parseCompactNumber(data.views?.count) ?? 0;
-      const l = parseCompactNumber(data.legacy.favorite_count) ?? 0;
-      const c = parseCompactNumber(data.legacy.reply_count) ?? 0;
-      acc.views += v;
-      acc.likes += l;
-      acc.comments += c;
-      acc.hasViews = true;
-      acc.hasLikes = true;
-      acc.hasComments = true;
     }
   }
 
@@ -377,7 +456,7 @@ export class LocalLlmBrowserAgent {
     ollamaEndpoint: 'http://127.0.0.1:11434',
     model: 'llama3.2',
     headless: false,
-    livePollingIntervalSec: 10,
+    livePollingIntervalSec: 25,
   };
   private onLogCallback: (log: BrowserAgentLog) => void;
 
@@ -423,6 +502,8 @@ export class LocalLlmBrowserAgent {
       );
       const baseOptions = {
         headless,
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
         args: ['--disable-blink-features=AutomationControlled'],
       };
@@ -520,7 +601,7 @@ export class LocalLlmBrowserAgent {
   }
 
   public async openLoginSession(account: PlatformAccount): Promise<boolean> {
-    const targetUrl = resolveAccountUrl(account, 'profile');
+    const targetUrl = resolveAccountUrl(account, 'analytics');
     this.emitLog('browser', `Opening persistent login session for ${account.name} at ${targetUrl}`, account.id);
     const ctx = await this.ensurePersistentContext(true);
     if (ctx) {
@@ -543,8 +624,12 @@ export class LocalLlmBrowserAgent {
   }
 
   /**
-   * Executes platform-specific deep DOM, embedded JSON state, and sub-resource extraction
-   * on the currently loaded page.
+   * Executes platform-specific DOM extraction on the dedicated Studio / Insights page:
+   * - Instagram: https://www.instagram.com/accounts/insights
+   * - YouTube: https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview
+   * - LinkedIn: https://www.linkedin.com/analytics/creator/content/
+   * - TikTok: https://www.tiktok.com/tiktokstudio
+   * - Twitter / X: https://x.com/{handle} (follower count only)
    */
   private async extractPageDeepMetrics(
     page: Page,
@@ -552,437 +637,13 @@ export class LocalLlmBrowserAgent {
     acc: DeepAccumulator
   ): Promise<string> {
     try {
-      if (platform === 'tiktok') {
-        const currentUrl = page.url();
-        // If redirected to login when trying TikTok Studio, skip Studio DOM extraction
-        if (currentUrl.includes('tiktokstudio') && !currentUrl.includes('login')) {
-          const studioStats = await page.evaluate(() => {
-            const text = document.body?.innerText || '';
-            // Sum table cells or studio metric cards if present
-            const viewNodes = Array.from(
-              document.querySelectorAll('[data-tt*="view"], [class*="view-count"], [class*="ViewCount"]')
-            ).map((el) => (el as HTMLElement).innerText);
-            return { text: text.slice(0, 5000), viewNodes };
-          });
-          const parsedText = extractMetricsFromText(studioStats.text);
-          if (parsedText.views && parsedText.views > acc.views) {
-            acc.views = parsedText.views;
-            acc.hasViews = true;
-          }
-          if (parsedText.likes && parsedText.likes > acc.likes) {
-            acc.likes = parsedText.likes;
-            acc.hasLikes = true;
-          }
-          if (parsedText.comments && parsedText.comments > acc.comments) {
-            acc.comments = parsedText.comments;
-            acc.hasComments = true;
-          }
-          if (parsedText.followers && parsedText.followers > acc.followers) {
-            acc.followers = parsedText.followers;
-            acc.hasFollowers = true;
-          }
-        }
-
-        // Extract from TikTok Creator Profile DOM + Rehydration JSON
-        const ttData = await page.evaluate(async () => {
-          const followersText =
-            (document.querySelector('[data-e2e="followers-count"]') as HTMLElement)?.innerText || '';
-          const likesText =
-            (document.querySelector('[data-e2e="likes-count"]') as HTMLElement)?.innerText || '';
-          const videoViewTexts = Array.from(
-            document.querySelectorAll('[data-e2e="video-views"]')
-          ).map((el) => (el as HTMLElement).innerText.trim());
-
-          let rehydrationJson = '';
-          const scriptEl =
-            document.querySelector('#__UNIVERSAL_DATA_FOR_REHYDRATION__') ||
-            document.querySelector('#SIGI_STATE');
-          if (scriptEl?.textContent) {
-            rehydrationJson = scriptEl.textContent;
-          }
-
-          // Also collect up to 6 recent video URLs on the profile so we can read their comment/like/view counts
-          const videoLinks = Array.from(
-            document.querySelectorAll('a[href*="/video/"]')
-          )
-            .map((a) => (a as HTMLAnchorElement).href)
-            .filter((v, i, arr) => v && arr.indexOf(v) === i)
-            .slice(0, 6);
-
-          // Fetch video HTML in-page to extract commentCount / playCount / diggCount from recent videos
-          let fetchedComments = 0;
-          let fetchedViews = 0;
-          let fetchedLikes = 0;
-          for (const link of videoLinks) {
-            try {
-              const res = await fetch(link, { credentials: 'include' });
-              if (!res.ok) continue;
-              const html = await res.text();
-              const cMatches = Array.from(html.matchAll(/"commentCount"\s*:\s*(\d+)/g));
-              const vMatches = Array.from(html.matchAll(/"playCount"\s*:\s*(\d+)/g));
-              const lMatches = Array.from(html.matchAll(/"diggCount"\s*:\s*(\d+)/g));
-              if (cMatches.length > 0) {
-                fetchedComments += parseInt(cMatches[0][1], 10) || 0;
-              }
-              if (vMatches.length > 0) {
-                fetchedViews += parseInt(vMatches[0][1], 10) || 0;
-              }
-              if (lMatches.length > 0) {
-                fetchedLikes += parseInt(lMatches[0][1], 10) || 0;
-              }
-            } catch {
-              // ignore fetch error
-            }
-          }
-
-          return {
-            followersText,
-            likesText,
-            videoViewTexts,
-            rehydrationJson,
-            fetchedComments,
-            fetchedViews,
-            fetchedLikes,
-            bodyText: document.body?.innerText?.slice(0, 4000) || '',
-          };
-        });
-
-        if (ttData.rehydrationJson) {
-          try {
-            harvestJsonMetrics('tiktok', JSON.parse(ttData.rehydrationJson), acc);
-          } catch {
-            // fallback to regex over raw script JSON
-            const cSum = sumCompactMatches(ttData.rehydrationJson, /"commentCount"\s*:\s*(\d+)/gi);
-            const vSum = sumCompactMatches(ttData.rehydrationJson, /"playCount"\s*:\s*(\d+)/gi);
-            if (cSum > acc.comments) {
-              acc.comments = cSum;
-              acc.hasComments = true;
-            }
-            if (vSum > acc.views) {
-              acc.views = vSum;
-              acc.hasViews = true;
-            }
-          }
-        }
-
-        const fParsed = parseCompactNumber(ttData.followersText);
-        if (fParsed !== null && fParsed >= acc.followers) {
-          acc.followers = fParsed;
-          acc.hasFollowers = true;
-        }
-
-        const lParsed = parseCompactNumber(ttData.likesText);
-        if (lParsed !== null && lParsed >= acc.likes) {
-          acc.likes = lParsed;
-          acc.hasLikes = true;
-        }
-
-        if (ttData.videoViewTexts.length > 0) {
-          const domGridViews = ttData.videoViewTexts.reduce(
-            (sum, raw) => sum + (parseCompactNumber(raw) ?? 0),
-            0
-          );
-          if (domGridViews >= acc.views) {
-            acc.views = domGridViews;
-            acc.hasViews = true;
-          }
-        }
-
-        if (ttData.fetchedViews > acc.views) {
-          acc.views = ttData.fetchedViews;
-          acc.hasViews = true;
-        }
-        if (ttData.fetchedLikes > acc.likes) {
-          acc.likes = ttData.fetchedLikes;
-          acc.hasLikes = true;
-        }
-        if (ttData.fetchedComments >= acc.comments && ttData.videoViewTexts.length > 0) {
-          acc.comments = ttData.fetchedComments;
-          acc.hasComments = true;
-        }
-
-        return ttData.bodyText;
-      }
-
+      // If YouTube Studio ever shows the "SKIP TO YOUTUBE STUDIO" prompt, click through it automatically
       if (platform === 'youtube') {
-        const ytData = await page.evaluate(async () => {
-          const bodyText = document.body?.innerText || '';
-          const ytInit: any = (window as any).ytInitialData || null;
-          const jsonStr = ytInit ? JSON.stringify(ytInit) : '';
-
-          // Collect all view counts visible on video/shorts cards on /shorts or /videos
-          const viewStrings: string[] = [];
-          document
-            .querySelectorAll(
-              '#metadata-line span, .ShortsLockupViewModelHostMetadataSubhead, .yt-core-attributed-string, ytd-grid-video-renderer #metadata-line span, ytd-rich-grid-media #metadata-line span'
-            )
-            .forEach((el) => {
-              const txt = (el as HTMLElement).innerText?.trim() || '';
-              if (/^\d+(?:[.,]\d+)?\s*[KMB]?\s*views$/i.test(txt)) {
-                viewStrings.push(txt);
-              }
-            });
-
-          // Collect unique video / short IDs from links on the channel page
-          const videoIds: string[] = [];
-          document
-            .querySelectorAll('a[href*="/shorts/"], a[href*="/watch?v="]')
-            .forEach((a) => {
-              const href = (a as HTMLAnchorElement).href || '';
-              const mShort = href.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
-              const mWatch = href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-              const vid = mShort?.[1] || mWatch?.[1];
-              if (vid && !videoIds.includes(vid)) {
-                videoIds.push(vid);
-              }
-            });
-
-          // Fetch up to 8 recent video watch pages concurrently to get exact Likes, Comments, and Views!
-          let totalVideoLikes = 0;
-          let totalVideoComments = 0;
-          let totalVideoViews = 0;
-
-          const targetIds = videoIds.slice(0, 8);
-          await Promise.all(
-            targetIds.map(async (vid) => {
-              try {
-                const res = await fetch(`https://www.youtube.com/watch?v=${vid}`, {
-                  credentials: 'include',
-                });
-                if (!res.ok) return;
-                const html = await res.text();
-
-                // Extract viewCount from playerResponse
-                const vMatch = html.match(/"viewCount"\s*:\s*"(\d+)"/);
-                if (vMatch?.[1]) {
-                  totalVideoViews += parseInt(vMatch[1], 10) || 0;
-                }
-
-                // Extract likeCount from topLevelButtons / likeButtonViewModel / microformat
-                const likeExact =
-                  html.match(/"likeCount"\s*:\s*"?(\d+)"?/) ||
-                  html.match(/along with ([\d,]+) other people/i) ||
-                  html.match(/"label"\s*:\s*"([\d,.]+\s*[KMB]?)\s*likes"/i) ||
-                  html.match(/"accessibilityText"\s*:\s*"Like this video along with ([\d,]+) other/i);
-                if (likeExact?.[1]) {
-                  const cleaned = likeExact[1].replace(/,/g, '');
-                  const n = parseFloat(cleaned);
-                  if (!isNaN(n)) totalVideoLikes += Math.round(n);
-                }
-
-                // Extract commentCount from engagement-panel-comments-section
-                const commentMatch =
-                  html.match(
-                    /"engagement-panel-comments-section"[\s\S]{0,1200}?"contextualInfo"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([\d,.]+[KMB]?)"/i
-                  ) ||
-                  html.match(/"commentCount"\s*:\s*\{\s*"simpleText"\s*:\s*"([\d,.]+[KMB]?)"/i) ||
-                  html.match(/"commentsCount"\s*:\s*"?(\d+)"?/i);
-                if (commentMatch?.[1]) {
-                  const cleaned = commentMatch[1].replace(/,/g, '');
-                  const n = parseFloat(cleaned);
-                  if (!isNaN(n)) totalVideoComments += Math.round(n);
-                }
-              } catch {
-                // ignore individual fetch error
-              }
-            })
-          );
-
-          return {
-            bodyText: bodyText.slice(0, 4500),
-            jsonStr: jsonStr.slice(0, 60000),
-            viewStrings,
-            totalVideoLikes,
-            totalVideoComments,
-            totalVideoViews,
-            videoCount: targetIds.length,
-          };
-        });
-
-        const bodyMetrics = extractMetricsFromText(ytData.bodyText);
-        if (bodyMetrics.followers !== undefined && bodyMetrics.followers >= acc.followers) {
-          acc.followers = bodyMetrics.followers;
-          acc.hasFollowers = true;
+        const skipBtn = await page.$('text=/SKIP TO YOUTUBE STUDIO/i');
+        if (skipBtn) {
+          await skipBtn.click().catch(() => {});
+          await page.waitForTimeout(3500);
         }
-
-        // Check subscriber count in ytInitialData if not in bodyText
-        const subMatch = ytData.jsonStr.match(/(\d+(?:[.,]\d+)?\s*[KMB]?)\s*subscribers/i);
-        if (subMatch?.[1]) {
-          const subCount = parseCompactNumber(subMatch[1]);
-          if (subCount !== null && subCount >= acc.followers) {
-            acc.followers = subCount;
-            acc.hasFollowers = true;
-          }
-        }
-
-        const uniqueViewStrings = Array.from(new Set(ytData.viewStrings));
-        const gridViews = uniqueViewStrings.reduce(
-          (sum, str) => sum + (parseCompactNumber(str.replace(/views/i, '')) ?? 0),
-          0
-        );
-
-        const bestViews = Math.max(
-          gridViews,
-          ytData.totalVideoViews,
-          bodyMetrics.views ?? 0
-        );
-        if (bestViews >= acc.views && bestViews > 0) {
-          acc.views = bestViews;
-          acc.hasViews = true;
-        }
-
-        if (ytData.totalVideoLikes >= acc.likes && ytData.videoCount > 0) {
-          acc.likes = ytData.totalVideoLikes;
-          acc.hasLikes = true;
-        }
-        if (ytData.totalVideoComments >= acc.comments && ytData.videoCount > 0) {
-          acc.comments = ytData.totalVideoComments;
-          acc.hasComments = true;
-        }
-
-        return ytData.bodyText;
-      }
-
-      if (platform === 'instagram') {
-        // Hover over post/reel thumbnails to trigger Instagram's hover overlay with Likes & Comments
-        const postHandles = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
-        for (const handle of postHandles.slice(0, 6)) {
-          try {
-            await handle.hover({ timeout: 800 });
-            await page.waitForTimeout(150);
-          } catch {
-            // ignore hover timeout
-          }
-        }
-
-        const igData = await page.evaluate(async () => {
-          const metaDesc =
-            document.querySelector('meta[name="description"]')?.getAttribute('content') ||
-            document.querySelector('meta[property="og:description"]')?.getAttribute('content') ||
-            '';
-
-          // Parse embedded JSON scripts for follower_count, play_count, like_count, comment_count
-          const scripts = Array.from(
-            document.querySelectorAll('script[type="application/json"]')
-          ).map((s) => s.textContent || '');
-
-          // Collect all post/reel links on the current tab (/reels/ or /handle/)
-          const mediaLinks = Array.from(
-            document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')
-          )
-            .map((a) => ({
-              href: (a as HTMLAnchorElement).href,
-              text: (a as HTMLElement).innerText?.trim() || '',
-            }))
-            .filter((v, i, arr) => v.href && arr.findIndex((x) => x.href === v.href) === i)
-            .slice(0, 6);
-
-          // Fetch individual post/reel pages to read their meta description ("X likes, Y comments")
-          let fetchedLikes = 0;
-          let fetchedComments = 0;
-          let fetchedViews = 0;
-
-          for (const item of mediaLinks) {
-            try {
-              const res = await fetch(item.href, { credentials: 'include' });
-              if (!res.ok) continue;
-              const html = await res.text();
-              const descMatch =
-                html.match(/content="([^"]*?\blikes\b[^"]*?\bcomments\b[^"]*)"/i) ||
-                html.match(/content="([^"]*?\bcomments\b[^"]*)"/i);
-              if (descMatch?.[1]) {
-                const d = descMatch[1];
-                const lM = d.match(/([\d,.]+\s*[KMB]?)\s*likes/i);
-                const cM = d.match(/([\d,.]+\s*[KMB]?)\s*comments/i);
-                if (lM?.[1]) {
-                  const n = parseFloat(lM[1].replace(/,/g, ''));
-                  if (!isNaN(n)) fetchedLikes += Math.round(n);
-                }
-                if (cM?.[1]) {
-                  const n = parseFloat(cM[1].replace(/,/g, ''));
-                  if (!isNaN(n)) fetchedComments += Math.round(n);
-                }
-              }
-              const playM =
-                html.match(/"play_count"\s*:\s*(\d+)/) ||
-                html.match(/"video_view_count"\s*:\s*(\d+)/) ||
-                html.match(/"view_count"\s*:\s*(\d+)/);
-              if (playM?.[1]) {
-                fetchedViews += parseInt(playM[1], 10) || 0;
-              }
-            } catch {
-              // ignore fetch error
-            }
-          }
-
-          return {
-            metaDesc,
-            scripts,
-            mediaLinks,
-            fetchedLikes,
-            fetchedComments,
-            fetchedViews,
-            bodyText: document.body?.innerText?.slice(0, 4000) || '',
-          };
-        });
-
-        for (const rawScript of igData.scripts) {
-          if (
-            rawScript.includes('edge_followed_by') ||
-            rawScript.includes('follower_count') ||
-            rawScript.includes('play_count') ||
-            rawScript.includes('like_count')
-          ) {
-            try {
-              harvestJsonMetrics('instagram', JSON.parse(rawScript), acc);
-            } catch {
-              // ignore parse error
-            }
-          }
-        }
-
-        const combinedText = `${igData.metaDesc}\n${igData.bodyText}`;
-        const textMetrics = extractMetricsFromText(combinedText);
-        if (textMetrics.followers !== undefined && textMetrics.followers >= acc.followers) {
-          acc.followers = textMetrics.followers;
-          acc.hasFollowers = true;
-        }
-
-        // On /reels/, each reel link's innerText is its view count (e.g. "124" or "1.4K")
-        let reelCardViews = 0;
-        for (const item of igData.mediaLinks) {
-          if (item.href.includes('/reel/') && item.text) {
-            const nums = item.text
-              .split(/\n+/)
-              .map((t) => parseCompactNumber(t.trim()))
-              .filter((n): n is number => n !== null);
-            if (nums.length === 1) {
-              reelCardViews += nums[0];
-            } else if (nums.length >= 3) {
-              // Likes, Comments, Views on reel card
-              reelCardViews += nums[nums.length - 1];
-            }
-          }
-        }
-
-        if (reelCardViews > acc.views) {
-          acc.views = reelCardViews;
-          acc.hasViews = true;
-        }
-        if (igData.fetchedViews > acc.views) {
-          acc.views = igData.fetchedViews;
-          acc.hasViews = true;
-        }
-        if (igData.fetchedLikes > acc.likes) {
-          acc.likes = igData.fetchedLikes;
-          acc.hasLikes = true;
-        }
-        if (igData.fetchedComments > acc.comments) {
-          acc.comments = igData.fetchedComments;
-          acc.hasComments = true;
-        }
-
-        return combinedText;
       }
 
       if (platform === 'twitter') {
@@ -991,15 +652,8 @@ export class LocalLlmBrowserAgent {
             'a[href$="/verified_followers"], a[href$="/followers"]'
           ) as HTMLElement | null;
           const followersText = followersEl?.innerText || '';
-
-          // Every tweet article on X has a group with aria-label="X replies, Y reposts, Z likes, W views"
-          const groupAriaLabels = Array.from(
-            document.querySelectorAll('article[data-testid="tweet"] [role="group"][aria-label]')
-          ).map((el) => el.getAttribute('aria-label') || '');
-
           return {
             followersText,
-            groupAriaLabels,
             bodyText: document.body?.innerText?.slice(0, 4000) || '',
           };
         });
@@ -1007,82 +661,41 @@ export class LocalLlmBrowserAgent {
         const fMatch = twData.followersText.match(/(\d+(?:[.,]\d+)?\s*[KMB]?)/i);
         if (fMatch?.[1]) {
           const parsed = parseCompactNumber(fMatch[1]);
-          if (parsed !== null && parsed >= acc.followers) {
+          if (parsed !== null) {
             acc.followers = parsed;
             acc.hasFollowers = true;
           }
-        }
-
-        if (twData.groupAriaLabels.length > 0) {
-          let ariaViews = 0;
-          let ariaLikes = 0;
-          let ariaReplies = 0;
-          for (const label of twData.groupAriaLabels) {
-            const mViews = label.match(/(\d+(?:[.,]\d+)?\s*[KMB]?)\s*views/i);
-            const mLikes = label.match(/(\d+(?:[.,]\d+)?\s*[KMB]?)\s*likes/i);
-            const mReplies = label.match(/(\d+(?:[.,]\d+)?\s*[KMB]?)\s*repl(?:y|ies)/i);
-            if (mViews?.[1]) ariaViews += parseCompactNumber(mViews[1]) ?? 0;
-            if (mLikes?.[1]) ariaLikes += parseCompactNumber(mLikes[1]) ?? 0;
-            if (mReplies?.[1]) ariaReplies += parseCompactNumber(mReplies[1]) ?? 0;
-          }
-          if (ariaViews >= acc.views) {
-            acc.views = ariaViews;
-            acc.hasViews = true;
-          }
-          if (ariaLikes >= acc.likes) {
-            acc.likes = ariaLikes;
-            acc.hasLikes = true;
-          }
-          if (ariaReplies >= acc.comments) {
-            acc.comments = ariaReplies;
-            acc.hasComments = true;
+        } else {
+          const parsed = extractMetricsFromText(twData.bodyText, 'twitter');
+          if (parsed.followers !== undefined) {
+            acc.followers = parsed.followers;
+            acc.hasFollowers = true;
           }
         }
-
         return twData.bodyText;
       }
 
-      if (platform === 'linkedin') {
-        const liData = await page.evaluate(() => {
-          const bodyText = document.body?.innerText || '';
-          const reactionNodes = Array.from(
-            document.querySelectorAll(
-              '.social-details-social-counts__reactions-count, [data-test-id="social-actions__reaction-count"]'
-            )
-          ).map((el) => (el as HTMLElement).innerText.trim());
-          return {
-            bodyText: bodyText.slice(0, 5000),
-            reactionNodes,
-          };
-        });
+      const bodyText = await page.evaluate(() => document.body?.innerText || '');
+      const parsed = extractMetricsFromText(bodyText, platform);
 
-        const textMetrics = extractMetricsFromText(liData.bodyText);
-        if (textMetrics.followers !== undefined && textMetrics.followers >= acc.followers) {
-          acc.followers = textMetrics.followers;
-          acc.hasFollowers = true;
-        }
-        if (textMetrics.views !== undefined && textMetrics.views >= acc.views) {
-          acc.views = textMetrics.views;
-          acc.hasViews = true;
-        }
-        if (textMetrics.comments !== undefined && textMetrics.comments >= acc.comments) {
-          acc.comments = textMetrics.comments;
-          acc.hasComments = true;
-        }
-        const reactionSum = liData.reactionNodes.reduce(
-          (sum, r) => sum + (parseCompactNumber(r) ?? 0),
-          0
-        );
-        const bestLikes = Math.max(reactionSum, textMetrics.likes ?? 0);
-        if (bestLikes >= acc.likes) {
-          acc.likes = bestLikes;
-          acc.hasLikes = true;
-        }
-
-        return liData.bodyText;
+      if (parsed.views !== undefined) {
+        acc.views = parsed.views;
+        acc.hasViews = true;
+      }
+      if (parsed.likes !== undefined) {
+        acc.likes = parsed.likes;
+        acc.hasLikes = true;
+      }
+      if (parsed.comments !== undefined) {
+        acc.comments = parsed.comments;
+        acc.hasComments = true;
+      }
+      if (parsed.followers !== undefined) {
+        acc.followers = parsed.followers;
+        acc.hasFollowers = true;
       }
 
-      return await page.evaluate(() => document.body?.innerText?.slice(0, 4000) || '');
+      return bodyText.slice(0, 4000);
     } catch {
       return '';
     }
@@ -1093,101 +706,47 @@ export class LocalLlmBrowserAgent {
     currentStats: PlatformStats
   ): Promise<PlatformStats> {
     const pagesToVisit = resolveExtractionPages(account);
-    const primaryUrl = pagesToVisit[0]?.url || resolveAccountUrl(account, 'analytics');
+    const target = pagesToVisit[0];
+    const targetUrl = target?.url || resolveAccountUrl(account, 'analytics');
     const acc = createAccumulator();
-    const visitedLabels: string[] = [];
-    let combinedDomSnippet = '';
+    let domSnippet = '';
+
+    this.emitLog(
+      'browser',
+      `Navigating to ${account.name} (${targetUrl}) to extract live metrics...`,
+      account.id
+    );
 
     const ctx = await this.ensurePersistentContext(false);
     if (ctx) {
-      const page = await this.getOrCreatePage(ctx, primaryUrl);
-
-      // Intercept JSON API responses while navigating across the platform's content/analytics tabs
-      const onResponse = async (response: any) => {
-        try {
-          const contentType = response.headers()['content-type'] || '';
-          const url = response.url();
-          if (
-            contentType.includes('json') &&
-            (url.includes('graphql') ||
-              url.includes('web_profile_info') ||
-              url.includes('clips/user') ||
-              url.includes('feed/user') ||
-              url.includes('item_list') ||
-              url.includes('user/detail') ||
-              url.includes('UserTweets') ||
-              url.includes('UserByScreenName') ||
-              url.includes('youtubei/v1/'))
-          ) {
-            const json = await response.json();
-            harvestJsonMetrics(account.id, json, acc);
-          }
-        } catch {
-          // ignore non-JSON or aborted response
-        }
-      };
-
-      page.on('response', onResponse);
-
       try {
-        for (const target of pagesToVisit) {
-          this.emitLog(
-            'browser',
-            `Navigating to ${account.name} — ${target.label} (${target.url}) to extract live metrics...`,
-            account.id
-          );
-
-          try {
-            await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await page.waitForTimeout(2200);
-
-            const currentUrl = page.url();
-            // If a studio/analytics URL redirected to a login gate, move on to the public content page
-            const isLoginRedirect =
-              /\/login|accounts\.google\.com|ServiceLogin|tiktok\.com\/login/i.test(currentUrl) &&
-              !target.url.includes('login');
-
-            if (isLoginRedirect) {
-              this.emitLog(
-                'browser',
-                `${target.label} requires sign-in; switching to public content feed for ${account.name}...`,
-                account.id
-              );
-              continue;
-            }
-
-            visitedLabels.push(`${target.label} (${target.url})`);
-            const snippet = await this.extractPageDeepMetrics(page, account.id, acc);
-            if (snippet) {
-              combinedDomSnippet += `\n--- [${target.label}] ---\n${snippet.slice(0, 2000)}`;
-            }
-
-            // If we already captured all 4 metrics with positive values, no need to load fallback tabs
-            if (acc.views > 0 && acc.likes > 0 && acc.comments > 0 && acc.followers > 0) {
-              break;
-            }
-          } catch (err: any) {
-            this.emitLog(
-              'browser',
-              `Navigation note on ${target.label}: ${err?.message || 'reading available DOM'}`,
-              account.id
-            );
-          }
-        }
-      } finally {
-        page.off('response', onResponse);
+        const page = await this.getOrCreatePage(ctx, targetUrl);
+        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.waitForTimeout(3500);
+        domSnippet = await this.extractPageDeepMetrics(page, account.id, acc);
+      } catch (err: any) {
+        this.emitLog(
+          'browser',
+          `Navigation note on ${account.name}: ${err?.message || 'reading available DOM'}`,
+          account.id
+        );
       }
     }
 
-    const domExtracted = combinedDomSnippet ? extractMetricsFromText(combinedDomSnippet) : {};
+    const domExtracted = domSnippet ? extractMetricsFromText(domSnippet, account.id) : {};
 
     let llmParsed: Partial<PlatformStats> | null = null;
-    if (combinedDomSnippet) {
-      const llmPrompt = `Extract social media statistics for ${account.name} (${account.handle || primaryUrl}) from the following multi-page content & analytics text.
-Page Text:
-${combinedDomSnippet.slice(0, 2500)}
+    const needsLlmFallback =
+      account.id === 'twitter'
+        ? !acc.hasFollowers
+        : !acc.hasViews && !acc.hasLikes && !acc.hasFollowers;
 
-Return JSON with integer keys: likes, comments, views, followers. Sum metrics across posts/videos if multiple are listed. Convert shorthand like 1.2K to 1200. If a metric is not found, use 0.`;
+    if (domSnippet && needsLlmFallback) {
+      const llmPrompt = `Extract social media statistics for ${account.name} (${targetUrl}) from the following page text.
+Page Text:
+${domSnippet.slice(0, 2200)}
+
+Return JSON with integer keys: likes, comments, views, followers. Convert shorthand like 1.2K to 1200. If a metric is not found, use 0.`;
 
       const llmJson = await this.queryOllama(llmPrompt, account.id);
       if (llmJson) {
@@ -1199,41 +758,60 @@ Return JSON with integer keys: likes, comments, views, followers. Sum metrics ac
       }
     }
 
+    const nextFollowers = acc.hasFollowers
+      ? acc.followers
+      : domExtracted.followers ??
+        (typeof llmParsed?.followers === 'number' && llmParsed.followers > 0
+          ? llmParsed.followers
+          : currentStats.followers);
+
+    // X has no stats, only show follower count
+    if (account.id === 'twitter') {
+      this.emitLog(
+        'stats',
+        `[${account.name}] Extracted from ${targetUrl} -> Followers: ${nextFollowers.toLocaleString()}`,
+        account.id
+      );
+      return {
+        platform: account.id,
+        likes: 0,
+        comments: 0,
+        views: 0,
+        followers: nextFollowers,
+        engagementRate: 0,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
     const nextViews = acc.hasViews
       ? acc.views
-      : (typeof llmParsed?.views === 'number' && llmParsed.views > 0
+      : domExtracted.views ??
+        (typeof llmParsed?.views === 'number' && llmParsed.views > 0
           ? llmParsed.views
-          : domExtracted.views ?? currentStats.views);
+          : currentStats.views);
 
     const nextLikes = acc.hasLikes
       ? acc.likes
-      : (typeof llmParsed?.likes === 'number' && llmParsed.likes > 0
+      : domExtracted.likes ??
+        (typeof llmParsed?.likes === 'number' && llmParsed.likes > 0
           ? llmParsed.likes
-          : domExtracted.likes ?? currentStats.likes);
+          : currentStats.likes);
 
     const nextComments = acc.hasComments
       ? acc.comments
-      : (typeof llmParsed?.comments === 'number' && llmParsed.comments > 0
+      : domExtracted.comments ??
+        (typeof llmParsed?.comments === 'number' && llmParsed.comments > 0
           ? llmParsed.comments
-          : domExtracted.comments ?? currentStats.comments);
-
-    const nextFollowers = acc.hasFollowers
-      ? acc.followers
-      : (typeof llmParsed?.followers === 'number' && llmParsed.followers > 0
-          ? llmParsed.followers
-          : domExtracted.followers ?? currentStats.followers);
+          : currentStats.comments);
 
     const engagementRate =
       nextViews > 0
         ? Number((((nextLikes + nextComments) / nextViews) * 100).toFixed(2))
         : 0;
 
-    const sourceSummary =
-      visitedLabels.length > 0 ? visitedLabels.join(' + ') : primaryUrl;
-
     this.emitLog(
       'stats',
-      `[${account.name}] Extracted from ${sourceSummary} -> Views: ${nextViews.toLocaleString()}, Likes: ${nextLikes.toLocaleString()}, Comments: ${nextComments.toLocaleString()}, Followers: ${nextFollowers.toLocaleString()}`,
+      `[${account.name}] Extracted from ${targetUrl} -> Views: ${nextViews.toLocaleString()}, Likes: ${nextLikes.toLocaleString()}, Comments: ${nextComments.toLocaleString()}, Followers: ${nextFollowers.toLocaleString()}`,
       account.id
     );
 

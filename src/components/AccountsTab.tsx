@@ -37,16 +37,14 @@ const PLATFORM_INPUT_GUIDE: Record<
     prefix: '@',
     placeholder: 'your_x_handle',
     example: '@alexcreates',
-    helpText: 'Extracts from your X Posts & Replies timeline + X Account Analytics.',
+    helpText: 'X has no post analytics; extracts your live Follower Count from your X profile.',
     formatPreviewUrl: (raw: string) => {
       const clean = raw
         .trim()
         .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, '')
         .replace(/^@/, '')
         .split('/')[0];
-      return clean
-        ? `https://x.com/${clean} + /i/account_analytics`
-        : 'https://x.com/your_x_handle';
+      return clean ? `https://x.com/${clean}` : 'https://x.com/your_x_handle';
     },
   },
   linkedin: {
@@ -54,68 +52,33 @@ const PLATFORM_INPUT_GUIDE: Record<
     prefix: 'linkedin.com/in/',
     placeholder: 'first-last-12345',
     example: 'jane-doe',
-    helpText: 'Extracts post impressions, reactions & comments from your Recent Activity feed + Creator Analytics.',
-    formatPreviewUrl: (raw: string) => {
-      const clean = raw
-        .trim()
-        .replace(/^https?:\/\/(www\.)?linkedin\.com\/(in|company)\//i, '')
-        .replace(/^in\//i, '')
-        .replace(/\/$/, '');
-      return clean
-        ? `https://www.linkedin.com/in/${clean}/recent-activity/all/`
-        : 'https://www.linkedin.com/in/your-profile-slug/recent-activity/all/';
-    },
+    helpText: 'Extracts live stats from https://www.linkedin.com/analytics/creator/content/.',
+    formatPreviewUrl: () => 'https://www.linkedin.com/analytics/creator/content/',
   },
   youtube: {
     label: 'YouTube Channel Handle',
     prefix: '@',
     placeholder: 'YourChannelName',
     example: '@MyChannel',
-    helpText: 'Extracts views, likes & comments across your /shorts, /videos, watch pages & YouTube Studio.',
-    formatPreviewUrl: (raw: string) => {
-      const clean = raw
-        .trim()
-        .replace(/^https?:\/\/(www\.)?youtube\.com\//i, '')
-        .replace(/^@/, '')
-        .split('/')[0];
-      return clean
-        ? `https://www.youtube.com/@${clean}/shorts & /videos`
-        : 'https://www.youtube.com/@YourChannelName/shorts';
-    },
+    helpText: 'Extracts live stats from YouTube Studio Analytics Hub Overview.',
+    formatPreviewUrl: () =>
+      'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview',
   },
   instagram: {
     label: 'Instagram Username',
     prefix: '@',
     placeholder: 'your.ig.username',
     example: '@creator.studio',
-    helpText: 'Extracts reel plays, post likes & comments from your /reels/ tab, post overlays & GraphQL.',
-    formatPreviewUrl: (raw: string) => {
-      const clean = raw
-        .trim()
-        .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
-        .replace(/^@/, '')
-        .split('/')[0];
-      return clean
-        ? `https://www.instagram.com/${clean}/reels/ & /${clean}/`
-        : 'https://www.instagram.com/your.ig.username/reels/';
-    },
+    helpText: 'Extracts live stats from Instagram Account Insights.',
+    formatPreviewUrl: () => 'https://www.instagram.com/accounts/insights',
   },
   tiktok: {
     label: 'TikTok Username',
     prefix: '@',
     placeholder: 'your_tiktok_handle',
     example: '@creator.tok',
-    helpText: 'Extracts video views, likes & comments from TikTok Studio Content + your @profile video grid.',
-    formatPreviewUrl: (raw: string) => {
-      const clean = raw
-        .trim()
-        .replace(/^https?:\/\/(www\.)?tiktok\.com\//i, '')
-        .replace(/^@/, '')
-        .split('/')[0];
-      return clean
-        ? `tiktokstudio/content + tiktok.com/@${clean}`
-        : 'https://www.tiktok.com/tiktokstudio/content';
-    },
+    helpText: 'Extracts live stats from TikTok Studio.',
+    formatPreviewUrl: () => 'https://www.tiktok.com/tiktokstudio',
   },
 };
 

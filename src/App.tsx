@@ -52,7 +52,7 @@ const DEFAULT_ACCOUNTS: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://x.com',
     uploadUrl: 'https://x.com/compose/post',
-    analyticsUrl: 'https://analytics.x.com',
+    analyticsUrl: 'https://x.com',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -63,7 +63,7 @@ const DEFAULT_ACCOUNTS: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://www.linkedin.com',
     uploadUrl: 'https://www.linkedin.com/feed/',
-    analyticsUrl: 'https://www.linkedin.com/analytics/',
+    analyticsUrl: 'https://www.linkedin.com/analytics/creator/content/',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -74,7 +74,7 @@ const DEFAULT_ACCOUNTS: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://www.youtube.com',
     uploadUrl: 'https://studio.youtube.com',
-    analyticsUrl: 'https://studio.youtube.com/channel/analytics',
+    analyticsUrl: 'https://studio.youtube.com/channel/UC-MXA8OTNJZWgKQxHjxBvFQ/analytics/hub_overview',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -85,7 +85,7 @@ const DEFAULT_ACCOUNTS: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://www.instagram.com',
     uploadUrl: 'https://www.instagram.com',
-    analyticsUrl: 'https://www.instagram.com/accounts/insights/',
+    analyticsUrl: 'https://www.instagram.com/accounts/insights',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -96,7 +96,7 @@ const DEFAULT_ACCOUNTS: PlatformAccount[] = [
     handle: '',
     profileUrl: 'https://www.tiktok.com',
     uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload',
-    analyticsUrl: 'https://www.tiktok.com/tiktokstudio/analytics',
+    analyticsUrl: 'https://www.tiktok.com/tiktokstudio',
     linked: false,
     lastSyncedAt: null,
     sessionStatus: 'disconnected',
@@ -206,7 +206,7 @@ export const App: React.FC = () => {
     ollamaEndpoint: 'http://127.0.0.1:11434',
     model: 'llama3.2',
     headless: true,
-    livePollingIntervalSec: 10,
+    livePollingIntervalSec: 25,
   });
 
   const [activeStatuses, setActiveStatuses] = useState<
@@ -277,14 +277,14 @@ export const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [isLiveRunning]);
 
-  // Randomized 9 to 11 second (9000ms - 11000ms) anti-bot & rate-limit-safe stats polling
+  // Randomized 20 to 30 second (20000ms - 30000ms) anti-bot & rate-limit-safe stats polling
   useEffect(() => {
     if (!isLiveRunning) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const scheduleNextPoll = () => {
-      const jitteredDelayMs = 9000 + Math.floor(Math.random() * 2001); // 9.0s to 11.0s
+      const jitteredDelayMs = 20000 + Math.floor(Math.random() * 10001); // 20.0s to 30.0s
       timeoutId = setTimeout(async () => {
         if (cancelled) return;
         await pollStatsNow();
