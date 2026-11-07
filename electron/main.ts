@@ -251,7 +251,7 @@ app.whenReady().then(() => {
   let pollInFlight: Promise<Record<PlatformId, PlatformStats>> | null = null;
 
   ipcMain.handle('stats:poll-browser', async (_event, platforms?: PlatformId[]) => {
-    if (!browserAgent) return statsStore;
+    if (!browserAgent || browserAgent.isUploadActive()) return statsStore;
     if (pollInFlight) {
       return await pollInFlight;
     }

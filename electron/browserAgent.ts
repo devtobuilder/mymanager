@@ -452,6 +452,7 @@ function harvestJsonMetrics(
 export class LocalLlmBrowserAgent {
   private context: BrowserContext | null = null;
   private contextHeadless: boolean | null = null;
+  private isUploadingActive = false;
   private userDataDir: string;
   private config: LlmConfig = {
     ollamaEndpoint: 'http://127.0.0.1:11434',
@@ -472,6 +473,10 @@ export class LocalLlmBrowserAgent {
 
   public getConfig(): LlmConfig {
     return this.config;
+  }
+
+  public isUploadActive(): boolean {
+    return this.isUploadingActive;
   }
 
   private emitLog(
@@ -498,6 +503,10 @@ export class LocalLlmBrowserAgent {
       const headless = forceVisible ? false : true;
 
       if (this.context && this.contextHeadless !== headless) {
+        // Do not close the visible browser context while an upload / publish session is in progress
+        if (this.isUploadingActive && !forceVisible) {
+          return null;
+        }
         await this.closeContext();
         await new Promise((r) => setTimeout(r, 600));
       }
@@ -997,11 +1006,10 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
       const line = lines[i];
       if (line.length > 0) {
         await page.keyboard.type(line, { delay: 12 }).catch(() => {});
-        // If the line ends with a hashtag, press Space then Escape so hashtag autocomplete popups don't swallow newlines
+        // If the line ends with a hashtag, press Space to commit the tag (avoid pressing Escape which closes composer modals)
         if (/#\w+$/.test(line.trim())) {
           await page.keyboard.press('Space').catch(() => {});
           await page.waitForTimeout(100);
-          await page.keyboard.press('Escape').catch(() => {});
         }
       }
       if (i < lines.length - 1) {
@@ -1019,136 +1027,206 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
     accounts: PlatformAccount[],
     onStatusUpdate: (status: PlatformUploadStatus) => void
   ): Promise<void> {
-    const isDryRun = payload.dryRun !== false;
-    const targetAccounts = accounts.filter(
-      (a) => a.linked && payload.platforms.includes(a.id)
-    );
-
-    this.emitLog(
-      'upload',
-      `${isDryRun ? '[TEST / STAGE ONLY — NO PUBLISH] ' : ''}Starting multi-platform video flow for "${payload.title}" across ${targetAccounts.length} linked platforms`
-    );
-
-    // Always launch a visible browser for upload staging/testing so the user can see and verify
-    const ctx = await this.ensurePersistentContext(true);
-    const hasVideoFile = Boolean(payload.videoPath && fs.existsSync(payload.videoPath));
-    const hasThumbnailFile = Boolean(payload.thumbnailPath && fs.existsSync(payload.thumbnailPath));
-    const suggestedTags = this.buildUploadTags(payload);
-    const userOrSuggestedTags = (payload.tags || '').trim() || suggestedTags;
-
-    // Tags are on the line directly below the text (single newline, no empty line)
-    // Title + Tags (for LinkedIn & Instagram)
-    const titleAndTagsCaption = [payload.title.trim(), userOrSuggestedTags.trim()]
-      .filter(Boolean)
-      .join('\n');
-
-    // Title + Description + Tags (for TikTok, etc. with single line spacing)
-    const fullCaption = [
-      payload.title.trim(),
-      payload.description.trim(),
-      userOrSuggestedTags.trim(),
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    for (const account of targetAccounts) {
-      const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
-      const targetUploadUrl =
-        account.id === 'linkedin'
-          ? 'https://www.linkedin.com/sharing/compose'
-          : account.uploadUrl;
-
-      onStatusUpdate({
-        platform: account.id,
-        status: 'opening_browser',
-        progress: 25,
-        message: `Opening ${account.name} upload studio (${targetUploadUrl})...`,
-      });
-      this.emitLog(
-        'browser',
-        `Opening ${account.name} upload studio (${targetUploadUrl})`,
-        account.id
+    this.isUploadingActive = true;
+    try {
+      const isDryRun = payload.dryRun !== false;
+      const targetAccounts = accounts.filter(
+        (a) => a.linked && payload.platforms.includes(a.id)
       );
 
-      let page: Page | null = null;
-      if (ctx) {
-        try {
-          page = await this.getOrCreatePage(ctx, targetUploadUrl);
-          await page.bringToFront();
-          await page.goto(targetUploadUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-          await page.waitForTimeout(2500);
-        } catch (err: any) {
-          this.emitLog(
-            'browser',
-            `Opened ${account.name} (${err?.message || 'ready'})`,
-            account.id
-          );
+      this.emitLog(
+        'upload',
+        `${isDryRun ? '[TEST / STAGE ONLY — NO PUBLISH] ' : ''}Starting multi-platform video flow for "${payload.title}" across ${targetAccounts.length} linked platforms`
+      );
+
+      // Always launch a visible browser for upload staging/testing so the user can see and verify
+      const ctx = await this.ensurePersistentContext(true);
+      const hasVideoFile = Boolean(payload.videoPath && fs.existsSync(payload.videoPath));
+      const hasThumbnailFile = Boolean(payload.thumbnailPath && fs.existsSync(payload.thumbnailPath));
+      const suggestedTags = this.buildUploadTags(payload);
+      const userOrSuggestedTags = (payload.tags || '').trim() || suggestedTags;
+
+      // Tags are on the line directly below the text (single newline, no empty line)
+      // Title + Tags (for LinkedIn & Instagram)
+      const titleAndTagsCaption = [payload.title.trim(), userOrSuggestedTags.trim()]
+        .filter(Boolean)
+        .join('\n');
+
+      // Title + Description + Tags (for TikTok, etc. with single line spacing)
+      const fullCaption = [
+        payload.title.trim(),
+        payload.description.trim(),
+        userOrSuggestedTags.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      for (const account of targetAccounts) {
+        const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+        const targetUploadUrl =
+          account.id === 'linkedin'
+            ? 'https://www.linkedin.com/sharing/compose'
+            : account.uploadUrl;
+
+        onStatusUpdate({
+          platform: account.id,
+          status: 'opening_browser',
+          progress: 25,
+          message: `Opening ${account.name} upload studio (${targetUploadUrl})...`,
+        });
+        this.emitLog(
+          'browser',
+          `Opening ${account.name} upload studio (${targetUploadUrl})`,
+          account.id
+        );
+
+        let page: Page | null = null;
+        if (ctx) {
+          try {
+            page = await this.getOrCreatePage(ctx, targetUploadUrl);
+            await page.bringToFront();
+
+            // Set up dialog dismisser to prevent unexpected browser beforeunload prompts from discarding posts
+            page.on('dialog', async (d) => {
+              try {
+                await d.dismiss();
+              } catch {}
+            });
+
+            const curUrl = page.url();
+            const targetHost = new URL(targetUploadUrl).hostname.replace(/^www\./, '');
+            const isSameDomain = curUrl && curUrl !== 'about:blank' && curUrl.includes(targetHost);
+
+            if (!isSameDomain) {
+              await page.goto(targetUploadUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+              await page.waitForTimeout(2500);
+            } else {
+              // If already on the platform, check if we're already on composer/upload page to avoid reloading and discarding staged drafts
+              const pathname = new URL(page.url()).pathname;
+              const needsNav =
+                (account.id === 'twitter' && !pathname.includes('/compose')) ||
+                (account.id === 'linkedin' && !pathname.includes('/sharing')) ||
+                (account.id === 'tiktok' && !pathname.includes('/upload')) ||
+                (account.id === 'youtube' && !pathname.includes('studio'));
+              if (needsNav) {
+                await page.goto(targetUploadUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await page.waitForTimeout(2000);
+              } else {
+                await page.waitForTimeout(1000);
+              }
+            }
+          } catch (err: any) {
+            this.emitLog(
+              'browser',
+              `Opened ${account.name} (${err?.message || 'ready'})`,
+              account.id
+            );
+          }
         }
-      }
 
-      onStatusUpdate({
-        platform: account.id,
-        status: 'llm_navigating',
-        progress: 55,
-        message: `Preparing upload modal & inputs on ${account.name}...`,
-      });
+        onStatusUpdate({
+          platform: account.id,
+          status: 'llm_navigating',
+          progress: 55,
+          message: `Preparing upload modal & inputs on ${account.name}...`,
+        });
 
-      if (page) {
-        try {
-          // =========================================================================
-          // 1. X / TWITTER: Only use Title (no description or tags)
-          // =========================================================================
-          if (account.id === 'twitter') {
-            if (hasVideoFile) {
+        if (page) {
+          try {
+            // =========================================================================
+            // 1. X / TWITTER: Only use Title (no description or tags)
+            // =========================================================================
+            if (account.id === 'twitter') {
+              // Safely dismiss any pre-existing discard dialog if present
+              await this.clickVisibleElement(page, ['[data-testid="confirmationSheetCancel"]']);
+
+              const alreadyHasMedia = await page
+                .$('[data-testid="attachments"], [data-testid="videoPlayer"]')
+                .catch(() => null);
+
+              if (hasVideoFile && !alreadyHasMedia) {
+                onStatusUpdate({
+                  platform: account.id,
+                  status: 'uploading_file',
+                  progress: 70,
+                  message: `Staging "${payload.videoFileName}" on X...`,
+                });
+                const fileInput = await page.$(
+                  'input[type="file"][data-testid="fileInput"], input[type="file"]'
+                );
+                if (fileInput) {
+                  await fileInput.setInputFiles(payload.videoPath);
+                  this.emitLog('upload', `Attached "${payload.videoFileName}" on X`, account.id);
+                  await page.waitForTimeout(2500);
+                }
+              }
+
               onStatusUpdate({
                 platform: account.id,
-                status: 'uploading_file',
-                progress: 70,
-                message: `Staging "${payload.videoFileName}" on X...`,
+                status: 'filling_metadata',
+                progress: 90,
+                message: `Setting Title only on X...`,
               });
-              const fileInput = await page.$(
-                'input[type="file"][data-testid="fileInput"], input[type="file"]'
+              await this.clearAndInsertText(
+                page,
+                '[data-testid="tweetTextarea_0"] [contenteditable="true"], [data-testid="tweetTextarea_0"], div[role="textbox"][contenteditable="true"]',
+                payload.title.trim()
               );
-              if (fileInput) {
-                await fileInput.setInputFiles(payload.videoPath);
-                this.emitLog('upload', `Attached "${payload.videoFileName}" on X`, account.id);
-                await page.waitForTimeout(2500);
+
+              // If not test mode, wait for upload to complete and click "Post"
+              if (!isDryRun) {
+                onStatusUpdate({
+                  platform: account.id,
+                  status: 'uploading_file',
+                  progress: 95,
+                  message: `Waiting for video upload to finish & publishing on X...`,
+                });
+                // Wait up to 60s for the Post button to become enabled while Twitter processes/uploads the media
+                const enabledPostSelector =
+                  '[data-testid="tweetButton"]:not([aria-disabled="true"]):not([disabled]), [data-testid="tweetButtonInline"]:not([aria-disabled="true"]):not([disabled])';
+
+                const postBtn = await page
+                  .waitForSelector(enabledPostSelector, { state: 'visible', timeout: 60000 })
+                  .catch(() => null);
+
+                if (postBtn) {
+                  await postBtn.click().catch(() => {});
+                  this.emitLog('upload', 'Clicked enabled "Post" on X', account.id);
+                } else {
+                  await this.clickVisibleElement(page, [
+                    '[data-testid="tweetButtonInline"]',
+                    '[data-testid="tweetButton"]',
+                    'button[role="button"]:has-text("Post")',
+                    'button:has-text("Post")',
+                  ]);
+                  this.emitLog('upload', 'Attempted fallback "Post" on X', account.id);
+                }
+
+                await page.waitForTimeout(3500);
+                // If a discard confirmation ever appears, dismiss it safely with Cancel (never Discard)
+                await this.clickVisibleElement(page, ['[data-testid="confirmationSheetCancel"]']);
               }
             }
-
-            onStatusUpdate({
-              platform: account.id,
-              status: 'filling_metadata',
-              progress: 90,
-              message: `Setting Title only on X...`,
-            });
-            await this.clearAndInsertText(
-              page,
-              '[data-testid="tweetTextarea_0"] [contenteditable="true"], [data-testid="tweetTextarea_0"], div[role="textbox"][contenteditable="true"]',
-              payload.title.trim()
-            );
-
-            // If not test mode, click "Post"
-            if (!isDryRun) {
-              await page.waitForTimeout(1000);
-              const clickedPost = await this.clickVisibleElement(page, [
-                '[data-testid="tweetButtonInline"]',
-                '[data-testid="tweetButton"]',
-                'button[role="button"]:has-text("Post")',
-                'button:has-text("Post")',
-              ]);
-              if (clickedPost) {
-                this.emitLog('upload', 'Clicked "Post" on X', account.id);
-                await page.waitForTimeout(3000);
-              }
-            }
-          }
 
           // =========================================================================
           // 2. LINKEDIN: Opens https://www.linkedin.com/sharing/compose directly, attaches video via media button, fills post
           // =========================================================================
           else if (account.id === 'linkedin') {
             let videoAttached = false;
+
+            // Ensure compose dialog is open (if not already opened by URL)
+            const composeBox = await page
+              .$('.ql-editor, div[role="dialog"] .share-creation-state, .share-box, div[role="dialog"]')
+              .catch(() => null);
+            if (!composeBox) {
+              await this.clickVisibleElement(page, [
+                'button:has-text("Start a post")',
+                'button.share-box-feed-entry__trigger',
+                'div[role="button"]:has-text("Start a post")',
+                'button:has-text("Create a post")',
+              ]);
+              await page.waitForTimeout(1500);
+            }
 
             if (hasVideoFile) {
               onStatusUpdate({
@@ -1169,12 +1247,16 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                 'button[aria-label*="Add media" i]',
                 'button[aria-label*="Add a photo" i]',
                 'button[aria-label*="media" i]',
+                'button[aria-label*="video" i]',
+                'button:has-text("Media")',
                 'button.share-promoted-detour-button',
                 'button:has(svg[data-test-icon="image-medium"])',
                 'button:has(svg[data-test-icon*="image"])',
+                'button:has(svg[data-test-icon*="video"])',
                 'button:has(svg path[d*="M19 4H5a3 3 0 00-3 3v10a3"])',
                 'div[role="button"][aria-label*="media" i]',
                 '.share-box-footer button:first-of-type',
+                '.share-creation-state__bottom-bar button:first-of-type',
               ]);
 
               const fc = await fcPromise;
@@ -1183,13 +1265,28 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                 videoAttached = true;
                 this.emitLog('upload', `Attached "${payload.videoFileName}" via LinkedIn media chooser`, account.id);
               } else {
-                // Check if clicking opened an file input or secondary modal
-                await page.waitForTimeout(1000);
-                const fileInputs = await page.$$('input[type="file"]');
-                if (fileInputs.length > 0) {
-                  await fileInputs[fileInputs.length - 1].setInputFiles(payload.videoPath);
+                // Check if clicking opened a file input or secondary modal
+                const fcPromise2 = page.waitForEvent('filechooser', { timeout: 4000 }).catch(() => null);
+                const clickedSelect = await this.clickVisibleElement(page, [
+                  'button:has-text("Select from computer")',
+                  'button:has-text("Upload from computer")',
+                  'label:has-text("Select from computer")',
+                  'label:has-text("Upload from computer")',
+                  'div[role="button"]:has-text("Select from computer")',
+                ]);
+                const fc2 = await fcPromise2;
+                if (fc2) {
+                  await fc2.setFiles(payload.videoPath);
                   videoAttached = true;
-                  this.emitLog('upload', `Attached "${payload.videoFileName}" via file input on LinkedIn`, account.id);
+                  this.emitLog('upload', `Attached "${payload.videoFileName}" via LinkedIn secondary modal filechooser`, account.id);
+                } else {
+                  await page.waitForTimeout(1000);
+                  const fileInputs = await page.$$('input[type="file"]');
+                  if (fileInputs.length > 0) {
+                    await fileInputs[fileInputs.length - 1].setInputFiles(payload.videoPath);
+                    videoAttached = true;
+                    this.emitLog('upload', `Attached "${payload.videoFileName}" via file input on LinkedIn`, account.id);
+                  }
                 }
               }
 
@@ -1246,14 +1343,21 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                   await page.waitForTimeout(1500);
                 }
 
-                // Click "Next" in LinkedIn's media preview dialog
+                // Wait for "Next" in LinkedIn's media preview dialog to become enabled, then click
+                await page
+                  .waitForSelector(
+                    'button[aria-label="Next"]:not([disabled]), button:has-text("Next"):not([disabled]), .share-box-footer__primary-btn:not([disabled])',
+                    { state: 'visible', timeout: 20000 }
+                  )
+                  .catch(() => null);
+
                 await this.clickVisibleElement(page, [
                   'button[aria-label="Next"]',
                   'button:has-text("Next")',
                   'span:text-is("Next")',
                   '.share-box-footer__primary-btn',
                 ]);
-                await page.waitForTimeout(1500);
+                await page.waitForTimeout(2000);
               }
             }
 
@@ -1270,18 +1374,43 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
               titleAndTagsCaption
             );
 
-            // If not test mode, click "Post"
+            // If not test mode, wait for processing and click "Post"
             if (!isDryRun) {
-              await page.waitForTimeout(1000);
-              const clickedPost = await this.clickVisibleElement(page, [
-                'button.share-actions__primary-action',
-                'button:has-text("Post")',
-                'button[aria-label="Post"]',
-                '.share-box_actions button.artdeco-button--primary',
-              ]);
-              if (clickedPost) {
-                this.emitLog('upload', 'Clicked "Post" on LinkedIn', account.id);
-                await page.waitForTimeout(3000);
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 95,
+                message: `Waiting for video processing & publishing on LinkedIn...`,
+              });
+
+              // Wait up to 60s for LinkedIn post button to become enabled
+              const enabledLinkedInPostSelector =
+                'button.share-actions__primary-action:not([disabled]), .share-box_actions button.artdeco-button--primary:not([disabled]), button[aria-label="Post"]:not([disabled])';
+
+              const postBtn = await page
+                .waitForSelector(enabledLinkedInPostSelector, { state: 'visible', timeout: 60000 })
+                .catch(() => null);
+
+              if (postBtn) {
+                await postBtn.click().catch(() => {});
+                this.emitLog('upload', 'Clicked enabled "Post" on LinkedIn', account.id);
+              } else {
+                await this.clickVisibleElement(page, [
+                  'button.share-actions__primary-action',
+                  'button:has-text("Post")',
+                  'button[aria-label="Post"]',
+                  '.share-box_actions button.artdeco-button--primary',
+                ]);
+                this.emitLog('upload', 'Attempted fallback "Post" on LinkedIn', account.id);
+              }
+
+              await page.waitForTimeout(4000);
+              // Dismiss any accidental discard draft dialog by clicking Cancel
+              const cancelDiscard = await page.$(
+                '.artdeco-modal button:has-text("Cancel"), button[aria-label="Cancel"]'
+              );
+              if (cancelDiscard) {
+                await cancelDiscard.click().catch(() => {});
               }
             }
           }
@@ -1501,6 +1630,14 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                 break;
               }
 
+              // Wait up to 10s for the Next button to be enabled before clicking
+              await page
+                .waitForSelector('#next-button:not([disabled]), ytcp-button#next-button:not([disabled])', {
+                  state: 'visible',
+                  timeout: 10000,
+                })
+                .catch(() => null);
+
               // Click next button
               const nextClicked = await page.evaluate(() => {
                 const btn = document.querySelector('#next-button, ytcp-button#next-button') as HTMLElement | null;
@@ -1552,6 +1689,21 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
 
             // Click Save / Publish
             if (!isDryRun) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 95,
+                message: `Clicking Publish on YouTube Studio...`,
+              });
+
+              // Wait up to 15s for the Publish button to become enabled
+              await page
+                .waitForSelector('#done-button:not([disabled]), ytcp-button#done-button:not([disabled])', {
+                  state: 'visible',
+                  timeout: 15000,
+                })
+                .catch(() => null);
+
               await page.evaluate(() => {
                 const doneBtn = document.querySelector('#done-button, ytcp-button#done-button') as HTMLElement | null;
                 if (doneBtn && !doneBtn.hasAttribute('disabled')) {
@@ -1568,7 +1720,71 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                 'button:has-text("Save")',
               ]);
               this.emitLog('upload', 'Clicked Publish on YouTube Studio', account.id);
-              await page.waitForTimeout(2000);
+              await page.waitForTimeout(1500);
+
+              // Check if "Publish anyway" confirmation dialog appeared (e.g. while checks are still running)
+              for (let attempt = 0; attempt < 8; attempt++) {
+                const clickedPublishAnyway = await this.clickVisibleElement(page, [
+                  'ytcp-button#publish-button:has-text("Publish anyway")',
+                  'ytcp-button#confirm-button:has-text("Publish anyway")',
+                  'ytcp-button:has-text("Publish anyway")',
+                  'button:has-text("Publish anyway")',
+                  'tp-yt-paper-button:has-text("Publish anyway")',
+                  'ytcp-button:has-text("Publish Anyway")',
+                  'button:has-text("Publish Anyway")',
+                  'tp-yt-paper-button:has-text("Publish Anyway")',
+                  'ytcp-button:has-text("PUBLISH ANYWAY")',
+                  'button:has-text("PUBLISH ANYWAY")',
+                  'tp-yt-paper-button:has-text("PUBLISH ANYWAY")',
+                  '[aria-label*="Publish anyway" i]',
+                ]);
+
+                if (clickedPublishAnyway) {
+                  this.emitLog('upload', 'Clicked "Publish anyway" confirmation on YouTube Studio', account.id);
+                  await page.waitForTimeout(2000);
+                  break;
+                }
+
+                // Check dialog button text via page.evaluate in case web component shadow DOM or inner elements hide text
+                const clickedViaEval = await page.evaluate(() => {
+                  const allButtons = Array.from(document.querySelectorAll('ytcp-button, tp-yt-paper-button, button'));
+                  const target = allButtons.find((b) => {
+                    const text = ((b as HTMLElement).innerText || '').toLowerCase().trim();
+                    return text.includes('publish anyway');
+                  }) as HTMLElement | null;
+                  if (target && !target.hasAttribute('disabled')) {
+                    target.click();
+                    return true;
+                  }
+                  return false;
+                }).catch(() => false);
+
+                if (clickedViaEval) {
+                  this.emitLog('upload', 'Clicked "Publish anyway" via evaluate on YouTube Studio', account.id);
+                  await page.waitForTimeout(2000);
+                  break;
+                }
+
+                await page.waitForTimeout(600);
+              }
+
+              // Dismiss post-publish dialog if present ("Video published" -> "Close")
+              for (let c = 0; c < 5; c++) {
+                const clickedClose = await this.clickVisibleElement(page, [
+                  '#close-button',
+                  'ytcp-button#close-button',
+                  'button:has-text("Close")',
+                  'tp-yt-paper-button:has-text("Close")',
+                  'ytcp-button:has-text("Close")',
+                  'tp-yt-paper-button[aria-label="Close"]',
+                ]);
+                if (clickedClose) {
+                  this.emitLog('upload', 'Closed post-publish dialog on YouTube Studio', account.id);
+                  break;
+                }
+                await page.waitForTimeout(600);
+              }
+              await page.waitForTimeout(1000);
             } else {
               this.emitLog('upload', '[Test Mode] Staged up to Public visibility on YouTube Studio', account.id);
             }
@@ -1724,7 +1940,14 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
 
             // If not test mode, click "Share"
             if (!isDryRun) {
+              onStatusUpdate({
+                platform: account.id,
+                status: 'uploading_file',
+                progress: 95,
+                message: `Publishing reel on Instagram...`,
+              });
               await page.waitForTimeout(1000);
+
               const clickedShare = await this.clickVisibleElement(page, [
                 'div[role="button"]:text-is("Share")',
                 'button:text-is("Share")',
@@ -1733,8 +1956,43 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
                 'header button:has-text("Share")',
               ]);
               if (clickedShare) {
-                this.emitLog('upload', 'Clicked "Share" on Instagram', account.id);
-                await page.waitForTimeout(4000);
+                this.emitLog('upload', 'Clicked "Share" on Instagram, waiting for upload to complete...', account.id);
+              }
+
+              // Wait up to 60s for Instagram to finish uploading and sharing the reel
+              const sharedConfirmationSelector =
+                'span:has-text("Your reel has been shared"), span:has-text("Your post has been shared"), h2:has-text("Your reel has been shared"), h2:has-text("Your post has been shared"), svg[aria-label="Post created"], svg[aria-label="Reel shared"]';
+
+              const confirmed = await page
+                .waitForSelector(sharedConfirmationSelector, { state: 'visible', timeout: 60000 })
+                .catch(() => null);
+
+              if (confirmed) {
+                this.emitLog('upload', 'Instagram confirmed: Reel has been shared!', account.id);
+                await page.waitForTimeout(1000);
+                // Cleanly close the completion dialog
+                await this.clickVisibleElement(page, [
+                  'svg[aria-label="Close"]',
+                  'button:has(svg[aria-label="Close"])',
+                  'div[role="button"]:has(svg[aria-label="Close"])',
+                  '[aria-label="Close"]',
+                ]);
+              } else {
+                await page.waitForTimeout(5000);
+              }
+
+              // Dismiss any accidental "Discard post?" dialog by clicking Cancel (never click Discard)
+              const cancelDiscardBtn = await page.$(
+                'button:has-text("Cancel"), div[role="button"]:has-text("Cancel")'
+              );
+              if (cancelDiscardBtn) {
+                const isDiscardModal = await page.evaluate(() => {
+                  return document.body.innerText.includes('Discard post?');
+                }).catch(() => false);
+                if (isDiscardModal) {
+                  await cancelDiscardBtn.click().catch(() => {});
+                  this.emitLog('upload', 'Safely dismissed Discard dialog on Instagram by clicking Cancel', account.id);
+                }
               }
             }
           }
@@ -1912,23 +2170,66 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
               await page.waitForTimeout(800);
               // TikTok should just be Title + Tags (single line below, no empty gap)
               await this.clearAndInsertText(page, tiktokCaptionSelector, titleAndTagsCaption);
-              await page.keyboard.press('Escape').catch(() => {});
 
-              // If not test mode, click "Post"
+              // If not test mode, wait for upload checks and click "Post"
               if (!isDryRun) {
+                onStatusUpdate({
+                  platform: account.id,
+                  status: 'uploading_file',
+                  progress: 95,
+                  message: `Waiting for TikTok upload checks & publishing...`,
+                });
                 await page.waitForTimeout(1500);
                 // Scroll down to ensure post button is in view
                 await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-                await page.waitForTimeout(500);
-                const clickedPost = await this.clickVisibleElement(page, [
-                  'button[data-e2e*="post"]:has-text("Post")',
-                  'button.btn-post:has-text("Post")',
-                  'button:text-is("Post")',
-                  'button:has-text("Post")',
-                ]);
-                if (clickedPost) {
-                  this.emitLog('upload', 'Clicked "Post" on TikTok Studio', account.id);
-                  await page.waitForTimeout(4000);
+                await page.waitForTimeout(1000);
+
+                // Wait up to 60s for TikTok Post button to become enabled (video upload & copyright checks complete)
+                const enabledTikTokPostSelector =
+                  'button[data-e2e*="post"]:not([disabled]):not([class*="disabled"]), button.btn-post:not([disabled]):not([class*="disabled"]), button:text-is("Post"):not([disabled]):not([class*="disabled"])';
+
+                const postBtn = await page
+                  .waitForSelector(enabledTikTokPostSelector, { state: 'visible', timeout: 60000 })
+                  .catch(() => null);
+
+                if (postBtn) {
+                  await postBtn.click().catch(() => {});
+                  this.emitLog('upload', 'Clicked enabled "Post" on TikTok Studio', account.id);
+                } else {
+                  const clickedPost = await this.clickVisibleElement(page, [
+                    'button[data-e2e*="post"]:has-text("Post")',
+                    'button.btn-post:has-text("Post")',
+                    'button:text-is("Post")',
+                    'button:has-text("Post")',
+                  ]);
+                  if (clickedPost) {
+                    this.emitLog('upload', 'Clicked "Post" on TikTok Studio', account.id);
+                  }
+                }
+
+                // Wait for TikTok submission confirmation modal
+                const postSuccessSelector =
+                  'div:has-text("Your video has been uploaded"), button:has-text("Manage your posts"), div:has-text("Manage your posts")';
+                const successModal = await page
+                  .waitForSelector(postSuccessSelector, { state: 'visible', timeout: 25000 })
+                  .catch(() => null);
+
+                if (successModal) {
+                  this.emitLog('upload', 'TikTok Studio confirmed upload published!', account.id);
+                }
+                await page.waitForTimeout(3000);
+
+                // Dismiss any accidental Discard dialog by clicking Keep editing / Cancel (never Discard)
+                const keepEditingBtn = await page.$(
+                  'button:has-text("Keep editing"), button:has-text("Cancel")'
+                );
+                if (keepEditingBtn) {
+                  const isDiscardModal = await page.evaluate(() => {
+                    return document.body.innerText.includes('Discard');
+                  }).catch(() => false);
+                  if (isDiscardModal) {
+                    await keepEditingBtn.click().catch(() => {});
+                  }
                 }
               }
             }
@@ -1950,7 +2251,7 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
         progress: 100,
         message: isDryRun
           ? `Staged in browser (Not Published) — "${payload.title}" on ${account.name}`
-          : `Ready / Staged "${payload.title}" on ${account.name}`,
+          : `Published "${payload.title}" on ${account.name}`,
         postUrl: account.uploadUrl,
         completedAt: new Date().toLocaleTimeString(),
       });
@@ -1958,9 +2259,12 @@ Return JSON with integer keys: likes, comments, views, followers. Convert shorth
         'upload',
         isDryRun
           ? `[Test Mode] Staged "${payload.title}" on ${account.name} without publishing. Browser left open for inspection.`
-          : `Completed upload staging for "${payload.title}" on ${account.name}.`,
+          : `Completed video publishing for "${payload.title}" on ${account.name}.`,
         account.id
       );
     }
+  } finally {
+    this.isUploadingActive = false;
   }
+}
 }

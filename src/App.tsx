@@ -312,18 +312,18 @@ export const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [isLiveRunning]);
 
-  // Randomized 20 to 30 second (20000ms - 30000ms) anti-bot & rate-limit-safe stats polling
+  // Randomized 20 to 30 second (20000ms - 30000ms) anti-bot & rate-limit-safe stats polling (paused during video uploads)
   useEffect(() => {
-    if (!isLiveRunning) return;
+    if (!isLiveRunning || isUploading) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const scheduleNextPoll = () => {
       const jitteredDelayMs = 20000 + Math.floor(Math.random() * 10001); // 20.0s to 30.0s
       timeoutId = setTimeout(async () => {
-        if (cancelled) return;
+        if (cancelled || isUploading) return;
         await pollStatsNow();
-        if (!cancelled) {
+        if (!cancelled && !isUploading) {
           scheduleNextPoll();
         }
       }, jitteredDelayMs);
@@ -334,7 +334,7 @@ export const App: React.FC = () => {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [isLiveRunning, pollStatsNow]);
+  }, [isLiveRunning, isUploading, pollStatsNow]);
 
   const handleUpdateHandle = async (platformId: PlatformId, handle: string) => {
     setAccounts((prev) =>
